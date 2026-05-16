@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <!-- Web SDK is still correct because this project hosts an HTTP API, even though it no longer serves Razor views. -->
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <NoWarn>$(NoWarn);1591</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <!-- Keep the root .dockerignore visible to the project so container builds stay aligned with the repository layout. -->
+      <Content Include="..\.dockerignore">
+        <Link>.dockerignore</Link>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.7" />
+      <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.7">
+        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        <PrivateAssets>all</PrivateAssets>
+      </PackageReference>
+      <PackageReference Include="MySql.EntityFrameworkCore" Version="10.0.7" />
+      <PackageReference Include="Swashbuckle.AspNetCore" Version="10.0.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Compile Update="Services\Auth\AuthService.cs">
+        <DependentUpon>IAuthService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Catalog\CatalogService.cs">
+        <DependentUpon>ICatalogService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Metadata\MetadataSyncService.cs">
+        <DependentUpon>IMetadataSyncService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Scraping\StreamScraperService.cs">
+        <DependentUpon>IStreamScraperService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Users\UserService.cs">
+        <DependentUpon>IUserService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Watch\PlaybackResolutionService.cs">
+        <DependentUpon>IPlaybackResolutionService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Watch\WatchPageService.cs">
+        <DependentUpon>IWatchPageService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Watch\WatchHistoryService.cs">
+        <DependentUpon>IWatchHistoryService.cs</DependentUpon>
+      </Compile>
+      <Compile Update="Services\Catalog\BatchMetadataSyncService.cs">
+        <DependentUpon>IBatchMetadataSyncService.cs</DependentUpon>
+      </Compile>
+    </ItemGroup>
+
+</Project>

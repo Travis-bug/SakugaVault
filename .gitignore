@@ -1,0 +1,35 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# IDE folders
+.idea/
+.vscode/
+*.DotSettings.user
+.env
+.env.*
+!.envrc
+/secrets/
+**/secrets/
+*.secrets.json
+appsettings.Local.json
+appsettings.*.Local.json
