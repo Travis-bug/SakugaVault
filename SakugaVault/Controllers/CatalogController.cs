@@ -1,0 +1,73 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using SakugaVault.Contracts.Catalog;
+using SakugaVault.Extensions;
+using SakugaVault.Services.Catalog;
+
+namespace SakugaVault.Controllers;
+
+/// <summary>
+/// Thin API controller for the catalog experience.
+/// During the MVC-to-API refactor this replaced the old Razor HomeController so the backend now
+/// behaves as a data service for React instead of rendering HTML on the server.
+/// </summary>
+[ApiController]
+[Route("api/catalog")]
+[Authorize]
+public sealed class CatalogController(
+    ICatalogService catalogService,
+    IBatchMetadataSyncService batchMetadataSyncService) : ControllerBase
+{
+    /// <summary>
+    /// Returns the data required to render the React catalog home page.
+    /// The controller does no shaping beyond delegating to the service and wrapping the result in 200 OK.
+    /// </summary>
+    [HttpGet("home")]
+    [ProducesResponseType(typeof(HomeCatalogDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<HomeCatalogDto>> GetHomeCatalog(CancellationToken cancellationToken)
+    {
+        var catalog = await catalogService.GetHomeCatalogAsync(cancellationToken);
+        return Ok(catalog);
+    }
+
+    [HttpPost("comments")]
+    [ProducesResponseType(typeof(CommentPostedDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<CommentPostedDto>> PostComment(PostCommentRequestDto request, CancellationToken cancellationToken)
+    {
+        var userId = User.GetUserId();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await catalogService.PostCommentAsync(userId.Value, request, cancellationToken);
+        if (!result.Succeeded)
+        {
+            var statusCode = result.ErrorCode switch
+            {
+                "anime_not_found" => StatusCodes.Status404NotFound,
+                _ => StatusCodes.Status400BadRequest
+            };
+
+            return StatusCode(statusCode, new ProblemDetails
+            {
+                Title = "Comment creation failed",
+                Detail = result.ErrorMessage,
+                Status = statusCode
+            });
+        }
+
+        return Created($"/api/catalog/comments/{result.Value!.CommentId}", result.Value);
+    }
+
+    [HttpPost("sync-metadata")]
+    [ProducesResponseType(typeof(BatchSyncResultDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<BatchSyncResultDto>> BatchSyncMetadata(BatchSyncRequestDto request, CancellationToken cancellationToken)
+    {
+        var result = await batchMetadataSyncService.BatchSyncAsync(request.AnimeIds, cancellationToken);
+        return Ok(result);
+    }
+}
