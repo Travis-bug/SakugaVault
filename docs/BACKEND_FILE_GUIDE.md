@@ -1,0 +1,94 @@
+# SakugaVault Backend File Guide
+
+This is the study map for the backend after the MVC-to-API refactor.
+
+## Read order
+
+1. `SakugaVault/Program.cs`
+2. `SakugaVault/Extensions/ServiceCollectionExtensions.cs`
+3. `SakugaVault/Data/SakugaVaultDbContext.cs`
+4. `SakugaVault/Models/*`
+5. `SakugaVault/Controllers/*`
+6. `SakugaVault/Services/*`
+7. `SakugaVault/Contracts/*`
+
+## What each folder does
+
+`SakugaVault/Data`
+- Holds `SakugaVaultDbContext`, the EF Core entry point for MySQL.
+- `DesignTimeSakugaVaultDbContextFactory.cs`: lets `dotnet ef` build the DbContext without going through the runtime startup path.
+- `SakugaVaultSeeder.cs`: development-only seed data for genres and anime so the catalog is usable on first run.
+
+`SakugaVault/Models`
+- Defines the persisted relational model.
+- `ApplicationUser.cs`: account record used by auth and watch history.
+- `Anime.cs`: anime metadata record.
+- `Genre.cs`: catalog taxonomy.
+- `AnimeGenre.cs`: many-to-many join between anime and genres.
+- `AnimeComment.cs`: stored comments for watch pages.
+- `WatchHistoryEntry.cs`: playback progress per user and episode.
+- `RefreshToken.cs`: persisted token rows used for refresh rotation and logout revocation.
+- `EntityBase.cs`: shared `Id`, `CreatedAtUtc`, and `UpdatedAtUtc` fields.
+
+`SakugaVault/Contracts`
+- Defines the external API payloads.
+- `Contracts/Auth`: request/response models for registration, login, and session hydration.
+- `Contracts/Catalog`: catalog screen DTOs, comment posting contracts, and batch metadata sync contracts.
+- `Contracts/Watch`: watch-page, cursor history, metadata-sync, and playback-resolution DTOs.
+- `Contracts/Common/CursorPagedResult.cs`: generic cursor-pagination wrapper used by watch history.
+
+`SakugaVault/Controllers`
+- Defines the HTTP API surface.
+- `AuthController.cs`: registration, login, and current-user routes.
+- `CatalogController.cs`: catalog home, comment posting, and batch metadata sync routes.
+- `WatchController.cs`: watch page plus history, metadata sync, and playback resolution routes.
+
+`SakugaVault/Services`
+- Holds business logic and orchestration.
+- `Services/Auth/AuthService.cs`: registration, login, password hashing, JWT issuance, refresh-token rotation, and logout revocation.
+- `Services/Users/UserService.cs`: user lookups and persistence.
+- `Services/Catalog/CatalogService.cs`: hero-banner and genre-row composition plus comment posting.
+- `Services/Catalog/BatchMetadataSyncService.cs`: sequential metadata refresh orchestration with a configurable delay between upstream calls.
+- `Services/Watch/WatchPageService.cs`: watch-page screen composition.
+- `Services/Watch/WatchHistoryService.cs`: cursor-paged history reads plus single-query progress upserts.
+- `Services/Watch/PlaybackResolutionService.cs`: coordinates primary-provider and fallback-provider stream resolution.
+- `Services/Metadata/MetadataSyncService.cs`: real Consumet-backed metadata sync plus catalog-cache invalidation.
+- `Services/Scraping/StreamScraperService.cs`: Consumet-backed episode lookup and source selection.
+- `Services/Common/OperationResult.cs`: simple service-layer success/failure wrapper.
+
+`SakugaVault/Extensions`
+- `ServiceCollectionExtensions.cs`: registers all layers and cross-cutting infrastructure.
+- `ClaimsPrincipalExtensions.cs`: reads the authenticated user id from JWT claims.
+- `CorsPolicyNames.cs`: central named CORS policy values.
+- `HttpContextItemKeys.cs`: shared key names for request-scoped items such as the correlation id.
+
+`SakugaVault/Middleware`
+- `CorrelationIdMiddleware.cs`: assigns or forwards `X-Correlation-Id`, stores it on the request, and opens a logging scope.
+
+`SakugaVault/Infrastructure/Logging`
+- `LoggingDelegatingHandler.cs`: logs outbound scraper-client HTTP calls with method, URL, status, and latency.
+
+`SakugaVault/Options`
+- Strongly typed configuration classes.
+- `FrontendOptions.cs`: allowed frontend origins for CORS.
+- `ScraperOptions.cs`: Consumet base URL, request timeout, fallback providers, and inter-request delay.
+- `JwtOptions.cs`: token issuer, audience, key sourcing, and access-token expiry.
+- `CatalogOptions.cs`: home-catalog cache duration.
+
+## Startup flow
+
+1. `Program.cs` builds the host and calls `AddApiLayer`, `AddApplicationLayer`, and `AddInfrastructureLayer`.
+2. `AddApiLayer` binds options, validates JWT secret and CORS rules, enables rate limiting, and configures OpenAPI.
+3. `AddInfrastructureLayer` wires MySQL, the named `scraper-client`, the outbound logging handler, password hashing, and `TimeProvider`.
+4. In Development, `Program.cs` applies migrations and runs `SakugaVaultSeeder` before the app starts accepting requests.
+5. `CorrelationIdMiddleware` runs early so downstream logs and outbound HTTP calls carry a shared correlation id.
+
+## Core architectural decisions
+
+- Controllers are thin: they validate HTTP concerns, read auth context, call services, and return status codes.
+- Services are fat: they contain orchestration, shaping, and workflow logic.
+- DTOs are separate from models: models represent database state; DTOs represent API contracts.
+- MySQL stores only relational application data, never video blobs.
+- Playback resolution is a separate workflow so stream hosts remain replaceable and legally isolated from the core app.
+- Secrets come from environment variables, not committed config.
+- Development may auto-migrate and seed; production should use a separate migration step.
