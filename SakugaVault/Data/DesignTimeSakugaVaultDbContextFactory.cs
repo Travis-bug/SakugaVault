@@ -24,8 +24,13 @@ public sealed class DesignTimeSakugaVaultDbContextFactory : IDesignTimeDbContext
             .AddEnvironmentVariables()
             .Build();
 
-        var connectionString = configuration.GetConnectionString("MySql")
-            ?? throw new InvalidOperationException("Connection string 'MySql' is missing.");
+        var connectionString = configuration.GetConnectionString("MySql");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            // EF Core only needs a parseable provider string to build migrations at design time.
+            // Runtime still requires a real MySQL connection string from environment configuration.
+            connectionString = "Server=localhost;Port=3306;Database=sakugavault;User=root;Password=;";
+        }
 
         var optionsBuilder = new DbContextOptionsBuilder<SakugaVaultDbContext>();
         optionsBuilder.UseMySQL(connectionString);

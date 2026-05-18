@@ -1,10 +1,13 @@
 using System.Reflection;
-using System.Text;
 using System.Threading.RateLimiting;
+using System.Text.Json.Serialization;
+using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -14,7 +17,9 @@ using SakugaVault.Models;
 using SakugaVault.Options;
 using SakugaVault.Services.Auth;
 using SakugaVault.Services.Catalog;
+using SakugaVault.Services.Downloads;
 using SakugaVault.Services.Metadata;
+using SakugaVault.Services.Profile;
 using SakugaVault.Services.Scraping;
 using SakugaVault.Services.Users;
 using SakugaVault.Services.Watch;
@@ -37,62 +42,112 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         IHostEnvironment environment)
     {
+        var authCookieOptions = configuration.GetSection(AuthCookieOptions.SectionName).Get<AuthCookieOptions>() ?? new AuthCookieOptions();
         var jwtOptions = BuildValidatedJwtOptions(configuration);
         var frontendOptions = configuration.GetSection(FrontendOptions.SectionName).Get<FrontendOptions>() ?? new FrontendOptions();
+        var scraperOptions = configuration.GetSection(ScraperOptions.SectionName).Get<ScraperOptions>() ?? new ScraperOptions();
         var allowedOrigins = frontendOptions.AllowedOrigins
             .Where(origin => !string.IsNullOrWhiteSpace(origin))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (allowedOrigins.Length == 0 && !environment.IsDevelopment())
+        if (allowedOrigins.Length == 0)
         {
             throw new InvalidOperationException(
-                "Frontend:AllowedOrigins must be configured outside Development. " +
-                "Set at least one allowed origin such as https://your-frontend.example.");
+                "Frontend:AllowedOrigins must be configured with explicit frontend origins. Refresh-cookie auth cannot use wildcard CORS.");
         }
 
-        if (allowedOrigins.Length == 0 && environment.IsDevelopment())
+        if (!environment.IsDevelopment())
         {
-            using var bootstrapLoggerFactory = LoggerFactory.Create(logging => logging.AddSimpleConsole());
-            var bootstrapLogger = bootstrapLoggerFactory.CreateLogger("Startup");
-            bootstrapLogger.LogWarning(
-                "Frontend:AllowedOrigins is empty in Development. Falling back to AllowAnyOrigin() for local development only.");
+            foreach (var origin in allowedOrigins)
+            {
+                if (!Uri.TryCreate(origin, UriKind.Absolute, out var originUri) || originUri.Scheme != Uri.UriSchemeHttps)
+                {
+                    throw new InvalidOperationException(
+                        $"Production CORS origin '{origin}' is not HTTPS. Only HTTPS frontend origins are allowed outside development.");
+                }
+            }
+
+            if (Uri.TryCreate(scraperOptions.ConsumetBaseUrl, UriKind.Absolute, out var scraperBaseUri) &&
+                string.Equals(scraperBaseUri.Host, "api.consumet.org", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Production cannot use the public api.consumet.org endpoint. Point Scrapers:ConsumetBaseUrl at your self-hosted Consumet instance.");
+            }
         }
 
         services.AddProblemDetails();
-        services.AddControllers();
+        services.AddControllers()
+            .AddJsonOptions(options =>
+            {
+                options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+            });
+        services.Configure<ApiBehaviorOptions>(options =>
+        {
+            options.InvalidModelStateResponseFactory = context =>
+            {
+                var validationProblem = new ValidationProblemDetails(context.ModelState)
+                {
+                    Title = "Some fields need attention.",
+                    Detail = GetFirstModelValidationMessage(context.ModelState) ??
+                             "Review the highlighted fields and try again.",
+                    Status = StatusCodes.Status400BadRequest
+                };
+
+                return new BadRequestObjectResult(validationProblem);
+            };
+        });
         services.AddEndpointsApiExplorer();
         services.AddHttpContextAccessor();
         services.AddRouting(options => options.LowercaseUrls = true);
         services.AddHealthChecks();
+        services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            options.KnownIPNetworks.Clear();
+            options.KnownProxies.Clear();
+        });
+        services.AddHsts(options =>
+        {
+            options.Preload = true;
+            options.IncludeSubDomains = true;
+            options.MaxAge = TimeSpan.FromDays(365);
+        });
         services.AddOptions<FrontendOptions>()
             .Bind(configuration.GetSection(FrontendOptions.SectionName))
             .ValidateOnStart();
         services.AddOptions<ScraperOptions>()
             .Bind(configuration.GetSection(ScraperOptions.SectionName))
+            .Validate(options => Uri.TryCreate(options.ConsumetBaseUrl, UriKind.Absolute, out _), "Scrapers:ConsumetBaseUrl must be an absolute URL.")
+            .Validate(options => options.RequestTimeoutSeconds > 0, "Scrapers:RequestTimeoutSeconds must be greater than zero.")
+            .Validate(options => options.InterRequestDelayMilliseconds >= 0, "Scrapers:InterRequestDelayMilliseconds cannot be negative.")
             .ValidateOnStart();
         services.AddOptions<CatalogOptions>()
             .Bind(configuration.GetSection(CatalogOptions.SectionName))
             .Validate(options => options.HomeCatalogCacheMinutes > 0, "Catalog:HomeCatalogCacheMinutes must be greater than zero.")
+            .Validate(options => !options.UseLiveProviderCatalog || options.HomePageCount > 0, "Catalog:HomePageCount must be greater than zero when live provider catalog is enabled.")
+            .Validate(options => !options.UseLiveProviderCatalog || options.LiveCatalogTitleLimit > 0, "Catalog:LiveCatalogTitleLimit must be greater than zero when live provider catalog is enabled.")
+            .ValidateOnStart();
+        services.AddOptions<AuthCookieOptions>()
+            .Bind(configuration.GetSection(AuthCookieOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.CookieName), "Authentication:CookieName is required.")
+            .Validate(options => options.RefreshTokenDays > 0, "Authentication:RefreshTokenDays must be greater than zero.")
             .ValidateOnStart();
         services.AddOptions<JwtOptions>()
-            .Bind(configuration.GetSection(JwtOptions.SectionName))
-            .PostConfigure(options =>
+            .Configure(options =>
             {
-                options.SigningKey = Environment.GetEnvironmentVariable(JwtOptions.SigningKeyEnvironmentVariable)
-                    ?? options.SigningKey;
+                var boundOptions = configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
+                options.Issuer = boundOptions.Issuer;
+                options.Audience = boundOptions.Audience;
+                options.AccessTokenMinutes = boundOptions.AccessTokenMinutes;
+                options.SigningKey = jwtOptions.SigningKey;
             })
-            .Validate(options => !string.IsNullOrWhiteSpace(options.Issuer), "Jwt:Issuer is required.")
-            .Validate(options => !string.IsNullOrWhiteSpace(options.Audience), "Jwt:Audience is required.")
-            .Validate(options => !string.IsNullOrWhiteSpace(options.SigningKey), $"JWT signing key must come from the {JwtOptions.SigningKeyEnvironmentVariable} environment variable.")
-            .Validate(options => options.SigningKey.Length >= 32, "JWT signing key must be at least 32 characters long.")
             .ValidateOnStart();
-
-        var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey));
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
+                options.RequireHttpsMetadata = !environment.IsDevelopment();
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
@@ -101,8 +156,44 @@ public static class ServiceCollectionExtensions
                     ValidateIssuerSigningKey = true,
                     ValidIssuer = jwtOptions.Issuer,
                     ValidAudience = jwtOptions.Audience,
-                    IssuerSigningKey = signingKey,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
                     ClockSkew = TimeSpan.FromMinutes(1)
+                };
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var authorizationHeader = context.Request.Headers.Authorization.ToString();
+                        if (authorizationHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            context.Token = authorizationHeader["Bearer ".Length..].Trim();
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                    OnChallenge = async context =>
+                    {
+                        context.HandleResponse();
+                        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        context.Response.ContentType = "application/problem+json";
+                        await context.Response.WriteAsJsonAsync(new ProblemDetails
+                        {
+                            Title = "Authentication required",
+                            Detail = "Your session is missing or expired. Sign in again to continue.",
+                            Status = StatusCodes.Status401Unauthorized
+                        });
+                    },
+                    OnForbidden = async context =>
+                    {
+                        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                        context.Response.ContentType = "application/problem+json";
+                        await context.Response.WriteAsJsonAsync(new ProblemDetails
+                        {
+                            Title = "Forbidden",
+                            Detail = "You do not have permission to perform this action.",
+                            Status = StatusCodes.Status403Forbidden
+                        });
+                    }
                 };
             });
 
@@ -148,20 +239,11 @@ public static class ServiceCollectionExtensions
         {
             options.AddPolicy(CorsPolicyNames.Frontend, policy =>
             {
-                if (allowedOrigins.Length == 0)
-                {
-                    policy
-                        .AllowAnyOrigin()
-                        .AllowAnyHeader()
-                        .AllowAnyMethod();
-
-                    return;
-                }
-
                 policy
                     .WithOrigins(allowedOrigins)
                     .AllowAnyHeader()
-                    .AllowAnyMethod();
+                    .AllowAnyMethod()
+                    .AllowCredentials();
             });
         });
 
@@ -177,7 +259,7 @@ public static class ServiceCollectionExtensions
             var bearerScheme = new OpenApiSecurityScheme
             {
                 Name = "Authorization",
-                Description = "JWT Bearer token. Example: 'Bearer {token}'",
+                Description = "Paste the short-lived JWT access token returned by login or refresh. The refresh token lives in an HttpOnly cookie.",
                 In = ParameterLocation.Header,
                 Type = SecuritySchemeType.Http,
                 Scheme = "bearer",
@@ -211,8 +293,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IBatchMetadataSyncService, BatchMetadataSyncService>();
         services.AddScoped<ICatalogService, CatalogService>();
+        services.AddScoped<ICatalogImportService, CatalogImportService>();
+        services.AddScoped<IDownloadQueueService, DownloadQueueService>();
         services.AddScoped<IMetadataSyncService, MetadataSyncService>();
         services.AddScoped<IPlaybackResolutionService, PlaybackResolutionService>();
+        services.AddScoped<IProfileService, ProfileService>();
+        services.AddScoped<IAnimeProviderClient, AnimeProviderClient>();
         services.AddScoped<IStreamScraperService, StreamScraperService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IWatchHistoryService, WatchHistoryService>();
@@ -269,22 +355,40 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    private static string? GetFirstModelValidationMessage(ModelStateDictionary modelState)
+    {
+        return modelState.Values
+            .SelectMany(entry => entry.Errors)
+            .Select(error => string.IsNullOrWhiteSpace(error.ErrorMessage)
+                ? "One of the submitted fields is invalid."
+                : error.ErrorMessage)
+            .FirstOrDefault();
+    }
+
     private static JwtOptions BuildValidatedJwtOptions(IConfiguration configuration)
     {
         var jwtOptions = configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
-        jwtOptions.SigningKey = Environment.GetEnvironmentVariable(JwtOptions.SigningKeyEnvironmentVariable)
-            ?? jwtOptions.SigningKey;
+        jwtOptions = new JwtOptions
+        {
+            Issuer = jwtOptions.Issuer,
+            Audience = jwtOptions.Audience,
+            AccessTokenMinutes = jwtOptions.AccessTokenMinutes,
+            SigningKey = configuration["ASPNETCORE_JWT_SIGNINGKEY"]?.Trim() ?? string.Empty
+        };
 
         if (string.IsNullOrWhiteSpace(jwtOptions.SigningKey))
         {
-            throw new InvalidOperationException(
-                $"JWT signing key is missing. Set the {JwtOptions.SigningKeyEnvironmentVariable} environment variable with a value at least 32 characters long.");
+            throw new InvalidOperationException("ASPNETCORE_JWT_SIGNINGKEY is missing. Set a real signing key through the environment or your secret store.");
         }
 
         if (jwtOptions.SigningKey.Length < 32)
         {
-            throw new InvalidOperationException(
-                $"JWT signing key is too short. The {JwtOptions.SigningKeyEnvironmentVariable} environment variable must be at least 32 characters long.");
+            throw new InvalidOperationException("ASPNETCORE_JWT_SIGNINGKEY must be at least 32 characters long.");
+        }
+
+        if (jwtOptions.AccessTokenMinutes <= 0)
+        {
+            throw new InvalidOperationException("Jwt:AccessTokenMinutes must be greater than zero.");
         }
 
         return jwtOptions;

@@ -1,7 +1,12 @@
 using SakugaVault.Extensions;
 using SakugaVault.Data;
+using Microsoft.AspNetCore.Diagnostics;
 using SakugaVault.Middleware;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using SakugaVault.Options;
 
 // This file is now the composition root for an API-first backend instead of an MVC site.
 // The main change in this refactor was removing Razor/static-asset startup and replacing it with
@@ -14,9 +19,10 @@ builder.Services.AddInfrastructureLayer(builder.Configuration);
 
 var app = builder.Build();
 
+app.UseForwardedHeaders();
+
 if (app.Environment.IsDevelopment())
 {
-    app.UseDeveloperExceptionPage();
     app.UseSwagger();
     app.UseSwaggerUI(options =>
     {
@@ -24,11 +30,65 @@ if (app.Environment.IsDevelopment())
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "SakugaVault API v1");
     });
 }
-else
+
+app.UseExceptionHandler(errorApp =>
+    errorApp.Run(async context =>
+    {
+        var exception = context.Features.Get<IExceptionHandlerPathFeature>()?.Error;
+        var (statusCode, title, detail) = exception switch
+        {
+            KeyNotFoundException => (
+                StatusCodes.Status404NotFound,
+                "Not found",
+                "The requested item could not be found."),
+            UnauthorizedAccessException => (
+                StatusCodes.Status403Forbidden,
+                "Forbidden",
+                "You do not have permission to perform this action."),
+            ArgumentException or FormatException => (
+                StatusCodes.Status400BadRequest,
+                "Invalid request",
+                "Some parts of the request could not be processed."),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Unexpected error",
+                "Something went wrong on the server. Please try again in a moment.")
+        };
+
+        context.Response.StatusCode = statusCode;
+        context.Response.ContentType = "application/problem+json";
+
+        var problem = new ProblemDetails
+        {
+            Title = title,
+            Detail = detail,
+            Status = statusCode
+        };
+
+        if (context.Items.TryGetValue(HttpContextItemKeys.CorrelationId, out var correlationId) &&
+            correlationId is string correlationIdValue &&
+            !string.IsNullOrWhiteSpace(correlationIdValue))
+        {
+            problem.Extensions["correlationId"] = correlationIdValue;
+        }
+
+        await context.Response.WriteAsJsonAsync(problem);
+    }));
+
+if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler();
     app.UseHsts();
 }
+
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    context.Response.Headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()";
+    context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
+    await next();
+});
 
 if (app.Environment.IsDevelopment())
 {
@@ -36,12 +96,17 @@ if (app.Environment.IsDevelopment())
     var dbContext = scope.ServiceProvider.GetRequiredService<SakugaVaultDbContext>();
     await dbContext.Database.MigrateAsync(app.Lifetime.ApplicationStopping);
 
-    var seeder = scope.ServiceProvider.GetRequiredService<SakugaVaultSeeder>();
-    await seeder.SeedAsync(app.Lifetime.ApplicationStopping);
+    var catalogOptions = scope.ServiceProvider.GetRequiredService<IOptions<CatalogOptions>>().Value;
+    if (catalogOptions.EnableDevelopmentSeedData)
+    {
+        var seeder = scope.ServiceProvider.GetRequiredService<SakugaVaultSeeder>();
+        await seeder.SeedAsync(app.Lifetime.ApplicationStopping);
+    }
 }
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseHttpsRedirection();
+app.UseRouting();
 app.UseCors(CorsPolicyNames.Frontend);
 app.UseRateLimiter();
 app.UseAuthentication();
