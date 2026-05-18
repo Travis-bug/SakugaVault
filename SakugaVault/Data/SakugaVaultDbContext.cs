@@ -21,6 +21,7 @@ public sealed class SakugaVaultDbContext(DbContextOptions<SakugaVaultDbContext> 
     public DbSet<Anime> Anime => Set<Anime>();
     public DbSet<AnimeComment> AnimeComments => Set<AnimeComment>();
     public DbSet<AnimeGenre> AnimeGenres => Set<AnimeGenre>();
+    public DbSet<DownloadRequest> DownloadRequests => Set<DownloadRequest>();
     public DbSet<ApplicationUser> Users => Set<ApplicationUser>();
     public DbSet<Genre> Genres => Set<Genre>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -126,6 +127,27 @@ public sealed class SakugaVaultDbContext(DbContextOptions<SakugaVaultDbContext> 
             builder.HasOne(token => token.User)
                 .WithMany(user => user.RefreshTokens)
                 .HasForeignKey(token => token.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DownloadRequest>(builder =>
+        {
+            builder.ToTable("DownloadRequests");
+            builder.HasKey(request => request.Id);
+            builder.HasIndex(request => new { request.UserId, request.CreatedAtUtc });
+            builder.HasIndex(request => new { request.UserId, request.AnimeId, request.EpisodeNumber, request.PreferredLanguage }).IsUnique();
+            builder.Property(request => request.PreferredLanguage).HasMaxLength(16).IsRequired();
+            builder.Property(request => request.Quality).HasMaxLength(32).IsRequired();
+            builder.Property(request => request.Status).HasMaxLength(32).IsRequired();
+
+            builder.HasOne(request => request.Anime)
+                .WithMany(anime => anime.DownloadRequests)
+                .HasForeignKey(request => request.AnimeId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            builder.HasOne(request => request.User)
+                .WithMany(user => user.DownloadRequests)
+                .HasForeignKey(request => request.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

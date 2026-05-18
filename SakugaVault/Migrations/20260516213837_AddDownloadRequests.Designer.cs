@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SakugaVault.Data;
 
@@ -10,9 +11,11 @@ using SakugaVault.Data;
 namespace SakugaVault.Migrations
 {
     [DbContext(typeof(SakugaVaultDbContext))]
-    partial class SakugaVaultDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260516213837_AddDownloadRequests")]
+    partial class AddDownloadRequests
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

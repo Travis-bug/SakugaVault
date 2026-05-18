@@ -22,5 +22,6 @@ public sealed class Anime : EntityBase
 
     public ICollection<AnimeGenre> AnimeGenres { get; } = [];
     public ICollection<AnimeComment> Comments { get; } = [];
+    public ICollection<DownloadRequest> DownloadRequests { get; } = [];
     public ICollection<WatchHistoryEntry> WatchHistoryEntries { get; } = [];
 }

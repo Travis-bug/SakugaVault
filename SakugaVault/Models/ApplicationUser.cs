@@ -14,6 +14,7 @@ public sealed class ApplicationUser : EntityBase
     public string PasswordHash { get; set; } = string.Empty;
 
     public ICollection<AnimeComment> Comments { get; } = [];
+    public ICollection<DownloadRequest> DownloadRequests { get; } = [];
     public ICollection<RefreshToken> RefreshTokens { get; } = [];
     public ICollection<WatchHistoryEntry> WatchHistoryEntries { get; } = [];
 }
