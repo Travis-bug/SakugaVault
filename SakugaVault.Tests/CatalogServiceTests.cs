@@ -1,8 +1,11 @@
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
 using SakugaVault.Contracts.Catalog;
 using SakugaVault.Models;
 using SakugaVault.Options;
 using SakugaVault.Services.Catalog;
+using SakugaVault.Services.Scraping;
 
 namespace SakugaVault.Tests;
 
@@ -107,7 +110,14 @@ public sealed class CatalogServiceTests
         var catalogService = new CatalogService(
             testDatabase.DbContext,
             memoryCache,
-            Microsoft.Extensions.Options.Options.Create(new CatalogOptions { HomeCatalogCacheMinutes = 5 }));
+            new StubAnimeProviderClient(),
+            Microsoft.Extensions.Options.Options.Create(new CatalogOptions
+            {
+                HomeCatalogCacheMinutes = 5,
+                UseLiveProviderCatalog = false
+            }),
+            Microsoft.Extensions.Options.Options.Create(new ScraperOptions()),
+            NullLogger<CatalogService>.Instance);
 
         var firstResult = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
 
@@ -131,12 +141,100 @@ public sealed class CatalogServiceTests
         Assert.Equal(firstResult.HeroBanner.Title, secondResult.HeroBanner.Title);
     }
 
-    private static CatalogService CreateCatalogService(SakugaVault.Data.SakugaVaultDbContext dbContext)
+    [Fact]
+    public async Task GetHomeCatalogAsync_LiveCatalogEnabled_UsesProviderResultsBeforeShadowStore()
+    {
+        await using var testDatabase = await TestDbContextFactory.CreateAsync();
+        var providerClient = new StubAnimeProviderClient();
+        providerClient.FeedResults["gogoanime"] =
+        [
+            new ProviderCatalogTitle("gogoanime", "solo-leveling", "Solo Leveling", "https://images.test/solo.jpg", 12, true, true)
+        ];
+        providerClient.InfoResults[("gogoanime", "solo-leveling")] = new ProviderAnimeInfo(
+            "gogoanime",
+            "solo-leveling",
+            "Solo Leveling",
+            "Hunters enter the dungeon.",
+            "https://images.test/solo.jpg",
+            "https://images.test/solo-cover.jpg",
+            true,
+            true,
+            12,
+            ["Action", "Fantasy"],
+            [new ProviderEpisodeInfo("solo-leveling-ep-1", 1, "Episode 1")]);
+
+        var catalogService = CreateCatalogService(
+            testDatabase.DbContext,
+            providerClient,
+            new CatalogOptions
+            {
+                HomeCatalogCacheMinutes = 5,
+                UseLiveProviderCatalog = true,
+                PreferredProviders = ["gogoanime"]
+            });
+
+        var result = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
+
+        Assert.Equal("Solo Leveling", result.HeroBanner.Title);
+        Assert.Contains(result.GenreRows, rail => rail.Genre == "Action");
+        Assert.Equal(1, await testDatabase.DbContext.Anime.CountAsync());
+    }
+
+    [Fact]
+    public async Task GetHomeCatalogAsync_FirstProviderFails_FallsBackToNextProvider()
+    {
+        await using var testDatabase = await TestDbContextFactory.CreateAsync();
+        var providerClient = new StubAnimeProviderClient();
+        providerClient.FeedResults["zoro"] =
+        [
+            new ProviderCatalogTitle("zoro", "blue-lock", "Blue Lock", "https://images.test/blue-lock.jpg", 24, true, true)
+        ];
+        providerClient.InfoResults[("zoro", "blue-lock")] = new ProviderAnimeInfo(
+            "zoro",
+            "blue-lock",
+            "Blue Lock",
+            "Strikers compete for one spot.",
+            "https://images.test/blue-lock.jpg",
+            "https://images.test/blue-lock-cover.jpg",
+            true,
+            true,
+            24,
+            ["Drama", "Sports"],
+            [new ProviderEpisodeInfo("blue-lock-ep-1", 1, "Episode 1")]);
+
+        var catalogService = CreateCatalogService(
+            testDatabase.DbContext,
+            providerClient,
+            new CatalogOptions
+            {
+                HomeCatalogCacheMinutes = 5,
+                UseLiveProviderCatalog = true,
+                PreferredProviders = ["gogoanime", "zoro"]
+            });
+
+        var result = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
+
+        Assert.Equal("Blue Lock", result.HeroBanner.Title);
+        Assert.Contains(providerClient.FeedRequests, request => request.Provider == "gogoanime");
+        Assert.Contains(providerClient.FeedRequests, request => request.Provider == "zoro");
+    }
+
+    private static CatalogService CreateCatalogService(
+        SakugaVault.Data.SakugaVaultDbContext dbContext,
+        IAnimeProviderClient? animeProviderClient = null,
+        CatalogOptions? catalogOptions = null)
     {
         return new CatalogService(
             dbContext,
             new MemoryCache(new MemoryCacheOptions()),
-            Microsoft.Extensions.Options.Options.Create(new CatalogOptions { HomeCatalogCacheMinutes = 5 }));
+            animeProviderClient ?? new StubAnimeProviderClient(),
+            Microsoft.Extensions.Options.Options.Create(catalogOptions ?? new CatalogOptions
+            {
+                HomeCatalogCacheMinutes = 5,
+                UseLiveProviderCatalog = false
+            }),
+            Microsoft.Extensions.Options.Options.Create(new ScraperOptions()),
+            NullLogger<CatalogService>.Instance);
     }
 
     private static async Task SeedCatalogAsync(SakugaVault.Data.SakugaVaultDbContext dbContext)
@@ -193,5 +291,50 @@ public sealed class CatalogServiceTests
             Anime = anime,
             Genre = genre
         };
+    }
+
+    private sealed class StubAnimeProviderClient : IAnimeProviderClient
+    {
+        public Dictionary<string, IReadOnlyCollection<ProviderCatalogTitle>> FeedResults { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<(string Provider, string ExternalId), ProviderAnimeInfo> InfoResults { get; } = [];
+        public List<(string Provider, string Feed)> FeedRequests { get; } = [];
+
+        public Task<IReadOnlyCollection<ProviderCatalogTitle>> GetFeedAsync(
+            string provider,
+            string feed,
+            int pageCount,
+            CancellationToken cancellationToken)
+        {
+            FeedRequests.Add((provider, feed));
+            return Task.FromResult(FeedResults.TryGetValue(provider, out var results)
+                ? results
+                : (IReadOnlyCollection<ProviderCatalogTitle>)[]);
+        }
+
+        public Task<IReadOnlyCollection<ProviderCatalogTitle>> SearchAsync(
+            string provider,
+            string query,
+            int page,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult((IReadOnlyCollection<ProviderCatalogTitle>)[]);
+        }
+
+        public Task<ProviderAnimeInfo?> GetAnimeInfoAsync(
+            string provider,
+            string externalId,
+            CancellationToken cancellationToken)
+        {
+            var result = InfoResults.TryGetValue((provider, externalId), out var value) ? value : null;
+            return Task.FromResult(result);
+        }
+
+        public Task<ProviderAnimeInfo?> FindAnimeInfoByTitleAsync(
+            string provider,
+            string title,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult<ProviderAnimeInfo?>(null);
+        }
     }
 }

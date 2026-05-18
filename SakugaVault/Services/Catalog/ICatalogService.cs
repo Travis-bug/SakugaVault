@@ -11,5 +11,6 @@ namespace SakugaVault.Services.Catalog;
 public interface ICatalogService
 {
     Task<HomeCatalogDto> GetHomeCatalogAsync(CancellationToken cancellationToken);
+    Task<CatalogSearchResponseDto> SearchAsync(string? query, int limit, CancellationToken cancellationToken);
     Task<OperationResult<CommentPostedDto>> PostCommentAsync(Guid userId, PostCommentRequestDto request, CancellationToken cancellationToken);
 }

@@ -88,6 +88,14 @@ public sealed class PlaybackResolutionService(
             Provider: request.ProviderOverride ?? anime.MetadataProvider ?? "unknown",
             StatusMessage: "No playback providers were configured for this title.");
 
+        if (!finalResult.IsResolved)
+        {
+            finalResult = finalResult with
+            {
+                StatusMessage = "This episode is temporarily unavailable from the current providers. Please try again later."
+            };
+        }
+
         return OperationResult<ResolvedPlaybackDto>.Success(
             new ResolvedPlaybackDto(
                 anime.Id,

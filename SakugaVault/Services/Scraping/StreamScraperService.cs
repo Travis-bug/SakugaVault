@@ -1,5 +1,4 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 using Microsoft.Extensions.Options;
 using SakugaVault.Models;
 using SakugaVault.Options;
@@ -12,15 +11,11 @@ namespace SakugaVault.Services.Scraping;
 /// response shapes into the rest of the application.
 /// </summary>
 public sealed class StreamScraperService(
+    IAnimeProviderClient animeProviderClient,
     IHttpClientFactory httpClientFactory,
     IOptions<ScraperOptions> scraperOptionsAccessor,
     ILogger<StreamScraperService> logger) : IStreamScraperService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     private readonly ScraperOptions scraperOptions = scraperOptionsAccessor.Value;
 
     public async Task<StreamScrapeResult> ResolveStreamAsync(
@@ -41,17 +36,6 @@ public sealed class StreamScraperService(
                 StatusMessage: "Host scrapers are disabled in configuration.");
         }
 
-        if (string.IsNullOrWhiteSpace(anime.ExternalMetadataId))
-        {
-            return new StreamScrapeResult(
-                IsResolved: false,
-                PreferredProtocol: "HLS",
-                StreamUrl: null,
-                SourceHost: providerOverride ?? anime.MetadataProvider,
-                Provider: providerOverride ?? anime.MetadataProvider ?? "unknown",
-                StatusMessage: "This anime does not have an ExternalMetadataId configured, so playback cannot be resolved.");
-        }
-
         var provider = string.IsNullOrWhiteSpace(providerOverride)
             ? anime.MetadataProvider
             : providerOverride;
@@ -67,35 +51,8 @@ public sealed class StreamScraperService(
                 StatusMessage: "No metadata provider was configured for this anime.");
         }
 
-        var client = httpClientFactory.CreateClient("scraper-client");
-        var infoRequestUri = $"/anime/{Uri.EscapeDataString(provider)}/info?id={Uri.EscapeDataString(anime.ExternalMetadataId)}";
-
-        logger.LogInformation(
-            "Requesting episode list from provider {Provider} for anime {AnimeId}, external ID {ExternalMetadataId}",
-            provider,
-            anime.Id,
-            anime.ExternalMetadataId);
-
-        using var infoResponse = await client.GetAsync(infoRequestUri, cancellationToken);
-        if (!infoResponse.IsSuccessStatusCode)
-        {
-            logger.LogWarning(
-                "Episode list request failed for anime {AnimeId}, provider {Provider}. Status code: {StatusCode}",
-                anime.Id,
-                provider,
-                (int)infoResponse.StatusCode);
-
-            return new StreamScrapeResult(
-                IsResolved: false,
-                PreferredProtocol: "HLS",
-                StreamUrl: null,
-                SourceHost: provider,
-                Provider: provider,
-                StatusMessage: $"Episode lookup failed with status code {(int)infoResponse.StatusCode}.");
-        }
-
-        var animeInfo = await infoResponse.Content.ReadFromJsonAsync<ConsumetAnimeInfoResponse>(JsonOptions, cancellationToken);
-        if (animeInfo?.Episodes is null || animeInfo.Episodes.Count == 0)
+        var providerInfo = await ResolveProviderInfoAsync(anime, provider, cancellationToken);
+        if (providerInfo is null || providerInfo.Episodes.Count == 0)
         {
             return new StreamScrapeResult(
                 IsResolved: false,
@@ -106,8 +63,8 @@ public sealed class StreamScraperService(
                 StatusMessage: "The provider returned no episode list for this anime.");
         }
 
-        var episode = ResolveEpisode(animeInfo.Episodes, episodeNumber);
-        if (episode?.Id is null)
+        var episode = ResolveEpisode(providerInfo.Episodes, episodeNumber);
+        if (episode is null)
         {
             return new StreamScrapeResult(
                 IsResolved: false,
@@ -118,6 +75,7 @@ public sealed class StreamScraperService(
                 StatusMessage: $"Episode {episodeNumber} is out of range for this provider.");
         }
 
+        var client = httpClientFactory.CreateClient("scraper-client");
         var watchRequestUri = $"/anime/{Uri.EscapeDataString(provider)}/watch?episodeId={Uri.EscapeDataString(episode.Id)}";
         logger.LogInformation(
             "Resolving stream sources for anime {AnimeId}, provider {Provider}, episode {EpisodeNumber}, episode ID {EpisodeId}",
@@ -129,16 +87,23 @@ public sealed class StreamScraperService(
         using var watchResponse = await client.GetAsync(watchRequestUri, cancellationToken);
         if (!watchResponse.IsSuccessStatusCode)
         {
+            logger.LogWarning(
+                "Provider {Provider} source lookup for anime {AnimeId}, episode {EpisodeNumber} failed with status code {StatusCode}",
+                provider,
+                anime.Id,
+                episodeNumber,
+                (int)watchResponse.StatusCode);
+
             return new StreamScrapeResult(
                 IsResolved: false,
                 PreferredProtocol: "HLS",
                 StreamUrl: null,
                 SourceHost: provider,
                 Provider: provider,
-                StatusMessage: $"Source lookup failed with status code {(int)watchResponse.StatusCode}.");
+                StatusMessage: BuildSourceLookupFailureMessage((int)watchResponse.StatusCode));
         }
 
-        var watchPayload = await watchResponse.Content.ReadFromJsonAsync<ConsumetWatchResponse>(JsonOptions, cancellationToken);
+        var watchPayload = await watchResponse.Content.ReadFromJsonAsync<ConsumetWatchResponse>(cancellationToken);
         var source = SelectBestSource(watchPayload?.Sources, preferredLanguage);
         if (source?.Url is null)
         {
@@ -167,9 +132,50 @@ public sealed class StreamScraperService(
             StatusMessage: "Playback source resolved successfully.");
     }
 
-    private static ConsumetEpisodeResponse? ResolveEpisode(IReadOnlyCollection<ConsumetEpisodeResponse> episodes, int episodeNumber)
+    private static string BuildSourceLookupFailureMessage(int statusCode)
     {
-        var byNumber = episodes.FirstOrDefault(episode => episode.Number.HasValue && (int)Math.Round(episode.Number.Value) == episodeNumber);
+        return statusCode switch
+        {
+            404 => "This episode is not available from the current provider.",
+            429 => "The provider is rate-limiting playback requests right now. Please try again shortly.",
+            451 => "This provider cannot serve the episode in the current region or legal context.",
+            >= 500 => "The provider is temporarily unavailable. Another provider will be tried if configured.",
+            _ => "This provider could not return a playable source right now."
+        };
+    }
+
+    private async Task<ProviderAnimeInfo?> ResolveProviderInfoAsync(
+        Anime anime,
+        string provider,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(provider, anime.MetadataProvider, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(anime.ExternalMetadataId))
+        {
+            logger.LogInformation(
+                "Requesting episode list from provider {Provider} for anime {AnimeId}, external ID {ExternalMetadataId}",
+                provider,
+                anime.Id,
+                anime.ExternalMetadataId);
+
+            var providerInfo = await animeProviderClient.GetAnimeInfoAsync(provider, anime.ExternalMetadataId, cancellationToken);
+            if (providerInfo is not null)
+            {
+                return providerInfo;
+            }
+        }
+
+        logger.LogInformation(
+            "Searching provider {Provider} by title for anime {AnimeId} because no provider-specific external ID could be used",
+            provider,
+            anime.Id);
+
+        return await animeProviderClient.FindAnimeInfoByTitleAsync(provider, anime.Title, cancellationToken);
+    }
+
+    private static ProviderEpisodeInfo? ResolveEpisode(IReadOnlyCollection<ProviderEpisodeInfo> episodes, int episodeNumber)
+    {
+        var byNumber = episodes.FirstOrDefault(episode => episode.EpisodeNumber == episodeNumber);
         if (byNumber is not null)
         {
             return byNumber;
@@ -205,13 +211,6 @@ public sealed class StreamScraperService(
         var digits = new string(quality.Where(char.IsDigit).ToArray());
         return int.TryParse(digits, out var value) ? value : 0;
     }
-
-    private sealed record ConsumetAnimeInfoResponse(
-        IReadOnlyCollection<ConsumetEpisodeResponse>? Episodes);
-
-    private sealed record ConsumetEpisodeResponse(
-        string? Id,
-        double? Number);
 
     private sealed record ConsumetWatchResponse(
         IReadOnlyCollection<ConsumetSourceResponse>? Sources);

@@ -55,6 +55,9 @@
       <Compile Update="Services\Catalog\BatchMetadataSyncService.cs">
         <DependentUpon>IBatchMetadataSyncService.cs</DependentUpon>
       </Compile>
+      <Compile Update="Services\Scraping\AnimeProviderClient.cs">
+        <DependentUpon>IAnimeProviderClient.cs</DependentUpon>
+      </Compile>
     </ItemGroup>
 
 </Project>

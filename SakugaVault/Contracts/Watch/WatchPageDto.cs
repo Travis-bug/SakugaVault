@@ -19,5 +19,6 @@ public sealed record WatchPageDto(
     bool DubAvailable,
     DateTimeOffset? MetadataLastSyncedAtUtc,
     PlaybackDescriptorDto Playback,
+    IReadOnlyCollection<WatchSeasonDto> Seasons,
     IReadOnlyCollection<CommentDto> Comments,
     IReadOnlyCollection<AnimeCardDto> SimilarAnime);
