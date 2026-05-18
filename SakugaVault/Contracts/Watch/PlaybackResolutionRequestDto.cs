@@ -7,6 +7,6 @@ namespace SakugaVault.Contracts.Watch;
 /// This is kept separate because playback resolution is not the same concern as loading the watch page shell.
 /// </summary>
 public sealed record PlaybackResolutionRequestDto(
-    [property: Range(1, int.MaxValue)] int EpisodeNumber,
-    [property: StringLength(16)] string PreferredLanguage = "sub",
-    [property: StringLength(64)] string? ProviderOverride = null);
+    [param: Range(1, int.MaxValue, ErrorMessage = "Episode number must be at least 1.")] int EpisodeNumber,
+    [param: StringLength(16, ErrorMessage = "Preferred language value is too long.")] string PreferredLanguage = "sub",
+    [param: StringLength(64, ErrorMessage = "Provider override value is too long.")] string? ProviderOverride = null);

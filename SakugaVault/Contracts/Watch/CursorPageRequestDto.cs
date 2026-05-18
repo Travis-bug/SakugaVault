@@ -7,4 +7,4 @@ namespace SakugaVault.Contracts.Watch;
 /// </summary>
 public sealed record CursorPageRequestDto(
     string? Cursor,
-    [property: Range(1, 100)] int PageSize = 20);
+    [param: Range(1, 100, ErrorMessage = "Page size must be between 1 and 100.")] int PageSize = 20);

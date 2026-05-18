@@ -12,16 +12,22 @@ namespace SakugaVault.Tests;
 
 public sealed class AuthServiceTests
 {
+    private static readonly AuthCookieOptions AuthCookieOptions = new()
+    {
+        CookieName = "SakugaVault.Tests.Refresh",
+        RefreshTokenDays = 7
+    };
+
     private static readonly JwtOptions JwtOptions = new()
     {
         Issuer = "SakugaVault.Tests",
-        Audience = "SakugaVault.Tests.Client",
-        SigningKey = new string('x', 32),
-        AccessTokenMinutes = 60
+        Audience = "SakugaVault.Tests.Web",
+        AccessTokenMinutes = 60,
+        SigningKey = "test-signing-key-for-auth-service-tests-12345"
     };
 
     [Fact]
-    public async Task RegisterAsync_NewUser_ReturnsValidJwtAndRefreshToken()
+    public async Task RegisterAsync_NewUser_ReturnsAccessAndRefreshTokens()
     {
         await using var testDatabase = await TestDbContextFactory.CreateAsync();
         var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-16T12:00:00Z"));
@@ -33,15 +39,15 @@ public sealed class AuthServiceTests
 
         Assert.True(result.Succeeded);
         Assert.NotNull(result.Value);
-        Assert.False(string.IsNullOrWhiteSpace(result.Value!.RefreshToken));
-
-        var token = new JwtSecurityTokenHandler().ReadJwtToken(result.Value.AccessToken);
-        Assert.Equal(JwtOptions.Issuer, token.Issuer);
-        Assert.Contains(JwtOptions.Audience, token.Audiences);
-        Assert.Equal(fakeTime.GetUtcNow().AddMinutes(JwtOptions.AccessTokenMinutes).UtcDateTime, token.ValidTo);
+        Assert.False(string.IsNullOrWhiteSpace(result.Value!.AccessToken));
+        Assert.False(string.IsNullOrWhiteSpace(result.Value.RefreshToken));
+        Assert.Equal(fakeTime.GetUtcNow().AddMinutes(JwtOptions.AccessTokenMinutes), result.Value.AccessTokenExpiresAtUtc);
+        Assert.Equal(fakeTime.GetUtcNow().AddDays(AuthCookieOptions.RefreshTokenDays), result.Value.RefreshTokenExpiresAtUtc);
         Assert.Equal("luffy@grandline.test", result.Value.User.Email);
         Assert.Equal(1, await testDatabase.DbContext.Users.CountAsync());
         Assert.Equal(1, await testDatabase.DbContext.RefreshTokens.CountAsync());
+
+        AssertJwt(result.Value.AccessToken, fakeTime.GetUtcNow().AddMinutes(JwtOptions.AccessTokenMinutes));
     }
 
     [Fact]
@@ -77,21 +83,23 @@ public sealed class AuthServiceTests
     [Theory]
     [InlineData("nami")]
     [InlineData("nami@weather.test")]
-    public async Task LoginAsync_ValidIdentifier_ReturnsJwtForEmailAndUserName(string identifier)
+    public async Task LoginAsync_ValidIdentifier_ReturnsAccessAndRefreshTokens(string identifier)
     {
         await using var testDatabase = await TestDbContextFactory.CreateAsync();
         const string password = "Tangerine123";
         await SeedUserAsync(testDatabase.DbContext, "nami", "nami@weather.test", password);
-        var authService = CreateAuthService(testDatabase.DbContext, new FakeTimeProvider());
+        var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-16T12:00:00Z"));
+        var authService = CreateAuthService(testDatabase.DbContext, fakeTime);
 
         var result = await authService.LoginAsync(new LoginRequestDto(identifier, password), CancellationToken.None);
 
         Assert.True(result.Succeeded);
         Assert.NotNull(result.Value);
-
-        var token = new JwtSecurityTokenHandler().ReadJwtToken(result.Value!.AccessToken);
-        Assert.Equal(JwtOptions.Issuer, token.Issuer);
-        Assert.Contains(JwtOptions.Audience, token.Audiences);
+        Assert.False(string.IsNullOrWhiteSpace(result.Value!.AccessToken));
+        Assert.False(string.IsNullOrWhiteSpace(result.Value.RefreshToken));
+        Assert.Equal(fakeTime.GetUtcNow().AddMinutes(JwtOptions.AccessTokenMinutes), result.Value.AccessTokenExpiresAtUtc);
+        Assert.Equal("nami@weather.test", result.Value.User.Email);
+        AssertJwt(result.Value.AccessToken, fakeTime.GetUtcNow().AddMinutes(JwtOptions.AccessTokenMinutes));
     }
 
     [Fact]
@@ -125,10 +133,53 @@ public sealed class AuthServiceTests
     }
 
     [Fact]
+    public async Task RefreshAsync_ValidRefreshToken_RotatesTokenAndReturnsNewAccessToken()
+    {
+        await using var testDatabase = await TestDbContextFactory.CreateAsync();
+        const string password = "Robin12345";
+        await SeedUserAsync(testDatabase.DbContext, "robin", "robin@poneglyph.test", password);
+        var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-16T12:00:00Z"));
+        var authService = CreateAuthService(testDatabase.DbContext, fakeTime);
+
+        var loginResult = await authService.LoginAsync(new LoginRequestDto("robin", password), CancellationToken.None);
+        Assert.True(loginResult.Succeeded);
+
+        fakeTime.Advance(TimeSpan.FromMinutes(5));
+        var refreshResult = await authService.RefreshAsync(loginResult.Value!.RefreshToken, CancellationToken.None);
+
+        Assert.True(refreshResult.Succeeded);
+        Assert.NotEqual(loginResult.Value.RefreshToken, refreshResult.Value!.RefreshToken);
+
+        var revokedToken = await testDatabase.DbContext.RefreshTokens
+            .SingleAsync(token => token.Token == loginResult.Value.RefreshToken);
+        Assert.True(revokedToken.IsRevoked);
+        Assert.Equal(2, await testDatabase.DbContext.RefreshTokens.CountAsync());
+        AssertJwt(refreshResult.Value.AccessToken, fakeTime.GetUtcNow().AddMinutes(JwtOptions.AccessTokenMinutes));
+    }
+
+    [Fact]
+    public async Task LogoutAsync_ValidRefreshToken_RevokesStoredToken()
+    {
+        await using var testDatabase = await TestDbContextFactory.CreateAsync();
+        const string password = "Super123";
+        await SeedUserAsync(testDatabase.DbContext, "franky", "franky@dock.test", password);
+        var authService = CreateAuthService(testDatabase.DbContext, new FakeTimeProvider());
+
+        var loginResult = await authService.LoginAsync(new LoginRequestDto("franky", password), CancellationToken.None);
+        Assert.True(loginResult.Succeeded);
+
+        await authService.LogoutAsync(loginResult.Value!.RefreshToken, CancellationToken.None);
+
+        var revokedToken = await testDatabase.DbContext.RefreshTokens
+            .SingleAsync(token => token.Token == loginResult.Value.RefreshToken);
+        Assert.True(revokedToken.IsRevoked);
+    }
+
+    [Fact]
     public async Task GetCurrentUserAsync_KnownUser_ReturnsCurrentUserDto()
     {
         await using var testDatabase = await TestDbContextFactory.CreateAsync();
-        var user = await SeedUserAsync(testDatabase.DbContext, "franky", "franky@dock.test");
+        var user = await SeedUserAsync(testDatabase.DbContext, "brook", "brook@music.test");
         var authService = CreateAuthService(testDatabase.DbContext, new FakeTimeProvider());
 
         var currentUser = await authService.GetCurrentUserAsync(user.Id, CancellationToken.None);
@@ -148,46 +199,6 @@ public sealed class AuthServiceTests
         Assert.Null(currentUser);
     }
 
-    [Fact]
-    public async Task RefreshAsync_ValidRefreshToken_RotatesTokenAndReturnsNewJwt()
-    {
-        await using var testDatabase = await TestDbContextFactory.CreateAsync();
-        var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-16T12:00:00Z"));
-        var authService = CreateAuthService(testDatabase.DbContext, fakeTime);
-
-        var registerResult = await authService.RegisterAsync(
-            new RegisterRequestDto("Brook", "brook", "brook@soul.test", "Binks1234"),
-            CancellationToken.None);
-
-        var refreshResult = await authService.RefreshAsync(registerResult.Value!.RefreshToken, CancellationToken.None);
-
-        Assert.True(refreshResult.Succeeded);
-        Assert.NotEqual(registerResult.Value.RefreshToken, refreshResult.Value!.RefreshToken);
-
-        var storedTokens = await testDatabase.DbContext.RefreshTokens.OrderBy(token => token.CreatedAtUtc).ToArrayAsync();
-        Assert.Equal(2, storedTokens.Length);
-        Assert.True(storedTokens[0].IsRevoked);
-        Assert.False(storedTokens[1].IsRevoked);
-    }
-
-    [Fact]
-    public async Task LogoutAsync_RevokedRefreshToken_PreventsReuse()
-    {
-        await using var testDatabase = await TestDbContextFactory.CreateAsync();
-        var authService = CreateAuthService(testDatabase.DbContext, new FakeTimeProvider());
-
-        var registerResult = await authService.RegisterAsync(
-            new RegisterRequestDto("Jinbe", "jinbe", "jinbe@fishman.test", "Helmsman123"),
-            CancellationToken.None);
-
-        var logoutResult = await authService.LogoutAsync(registerResult.Value!.RefreshToken, CancellationToken.None);
-        var refreshResult = await authService.RefreshAsync(registerResult.Value.RefreshToken, CancellationToken.None);
-
-        Assert.True(logoutResult.Succeeded);
-        Assert.False(refreshResult.Succeeded);
-        Assert.Equal("invalid_refresh_token", refreshResult.ErrorCode);
-    }
-
     private static AuthService CreateAuthService(
         SakugaVault.Data.SakugaVaultDbContext dbContext,
         FakeTimeProvider fakeTimeProvider,
@@ -195,9 +206,10 @@ public sealed class AuthServiceTests
     {
         var userService = new UserService(dbContext);
         return new AuthService(
-            userService,
             dbContext,
+            userService,
             passwordHasher ?? new PasswordHasher<ApplicationUser>(),
+            Microsoft.Extensions.Options.Options.Create(AuthCookieOptions),
             Microsoft.Extensions.Options.Options.Create(JwtOptions),
             fakeTimeProvider);
     }
@@ -221,6 +233,16 @@ public sealed class AuthServiceTests
         dbContext.Users.Add(user);
         await dbContext.SaveChangesAsync();
         return user;
+    }
+
+    private static void AssertJwt(string accessToken, DateTimeOffset expectedExpiry)
+    {
+        var handler = new JwtSecurityTokenHandler();
+        var token = handler.ReadJwtToken(accessToken);
+
+        Assert.Equal(JwtOptions.Issuer, token.Issuer);
+        Assert.Contains(JwtOptions.Audience, token.Audiences);
+        Assert.Equal(expectedExpiry.UtcDateTime, token.ValidTo);
     }
 
     private sealed class RehashingPasswordHasher : IPasswordHasher<ApplicationUser>

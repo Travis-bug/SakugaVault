@@ -6,5 +6,5 @@ namespace SakugaVault.Contracts.Catalog;
 /// Request payload for creating a comment on an anime title.
 /// </summary>
 public sealed record PostCommentRequestDto(
-    [property: Required] Guid AnimeId,
-    [property: Required, MaxLength(2000)] string Body);
+    [param: Required(ErrorMessage = "Anime selection is required.")] Guid AnimeId,
+    [param: Required(ErrorMessage = "Comment text is required."), MaxLength(2000, ErrorMessage = "Comment text must be 2000 characters or fewer.")] string Body);

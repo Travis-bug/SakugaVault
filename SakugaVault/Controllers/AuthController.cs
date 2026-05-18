@@ -3,18 +3,25 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using SakugaVault.Contracts.Auth;
 using SakugaVault.Extensions;
+using SakugaVault.Options;
 using SakugaVault.Services.Auth;
+using Microsoft.Extensions.Options;
 
 namespace SakugaVault.Controllers;
 
 /// <summary>
 /// Auth controller for account creation, login, and current-user retrieval.
-/// Its job is routing and HTTP status mapping; hashing and token logic live in AuthService.
+/// Its job is routing, refresh-cookie transport, and HTTP status mapping; password verification and token logic live in AuthService.
 /// </summary>
 [ApiController]
 [Route("api/auth")]
-public sealed class AuthController(IAuthService authService) : ControllerBase
+public sealed class AuthController(
+    IAuthService authService,
+    IOptions<AuthCookieOptions> authCookieOptionsAccessor,
+    IHostEnvironment environment) : ControllerBase
 {
+    private readonly AuthCookieOptions authCookieOptions = authCookieOptionsAccessor.Value;
+
     [AllowAnonymous]
     [EnableRateLimiting("auth-register")]
     [HttpPost("register")]
@@ -33,7 +40,9 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
             });
         }
 
-        return Ok(result.Value);
+        SetNoStoreHeaders();
+        AppendRefreshTokenCookie(result.Value!.RefreshToken, result.Value.RefreshTokenExpiresAtUtc);
+        return Ok(ToResponse(result.Value));
     }
 
     [AllowAnonymous]
@@ -54,18 +63,32 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
             });
         }
 
-        return Ok(result.Value);
+        SetNoStoreHeaders();
+        AppendRefreshTokenCookie(result.Value!.RefreshToken, result.Value.RefreshTokenExpiresAtUtc);
+        return Ok(ToResponse(result.Value));
     }
 
     [AllowAnonymous]
     [HttpPost("refresh")]
     [ProducesResponseType(typeof(AuthResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult<AuthResponseDto>> Refresh(RefreshTokenRequestDto request, CancellationToken cancellationToken)
+    public async Task<ActionResult<AuthResponseDto>> Refresh(CancellationToken cancellationToken)
     {
-        var result = await authService.RefreshAsync(request.RefreshToken, cancellationToken);
+        var refreshToken = Request.Cookies[authCookieOptions.CookieName];
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Unauthorized(new ProblemDetails
+            {
+                Title = "Refresh failed",
+                Detail = "Your session has expired. Sign in again.",
+                Status = StatusCodes.Status401Unauthorized
+            });
+        }
+
+        var result = await authService.RefreshAsync(refreshToken, cancellationToken);
         if (!result.Succeeded)
         {
+            ClearRefreshTokenCookie();
             return Unauthorized(new ProblemDetails
             {
                 Title = "Refresh failed",
@@ -74,26 +97,20 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
             });
         }
 
-        return Ok(result.Value);
+        SetNoStoreHeaders();
+        AppendRefreshTokenCookie(result.Value!.RefreshToken, result.Value.RefreshTokenExpiresAtUtc);
+        return Ok(ToResponse(result.Value));
     }
 
-    [Authorize]
+    [AllowAnonymous]
     [HttpPost("logout")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<IActionResult> Logout(RefreshTokenRequestDto request, CancellationToken cancellationToken)
+    public async Task<IActionResult> Logout(CancellationToken cancellationToken)
     {
-        var result = await authService.LogoutAsync(request.RefreshToken, cancellationToken);
-        if (!result.Succeeded)
-        {
-            return Unauthorized(new ProblemDetails
-            {
-                Title = "Logout failed",
-                Detail = result.ErrorMessage,
-                Status = StatusCodes.Status401Unauthorized
-            });
-        }
-
+        var refreshToken = Request.Cookies[authCookieOptions.CookieName];
+        await authService.LogoutAsync(refreshToken, cancellationToken);
+        SetNoStoreHeaders();
+        ClearRefreshTokenCookie();
         return NoContent();
     }
 
@@ -117,5 +134,42 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
         }
 
         return Ok(user);
+    }
+
+    private void SetNoStoreHeaders()
+    {
+        Response.Headers.CacheControl = "no-store, no-cache, max-age=0";
+        Response.Headers.Pragma = "no-cache";
+        Response.Headers.Expires = "0";
+    }
+
+    private AuthResponseDto ToResponse(AuthSessionResult session)
+    {
+        return new AuthResponseDto(session.AccessToken, session.AccessTokenExpiresAtUtc, session.User);
+    }
+
+    private void AppendRefreshTokenCookie(string refreshToken, DateTimeOffset expiresAtUtc)
+    {
+        Response.Cookies.Append(authCookieOptions.CookieName, refreshToken, new CookieOptions
+        {
+            HttpOnly = true,
+            IsEssential = true,
+            Secure = !environment.IsDevelopment(),
+            SameSite = environment.IsDevelopment() ? SameSiteMode.Lax : SameSiteMode.None,
+            Expires = expiresAtUtc.UtcDateTime,
+            Path = "/"
+        });
+    }
+
+    private void ClearRefreshTokenCookie()
+    {
+        Response.Cookies.Delete(authCookieOptions.CookieName, new CookieOptions
+        {
+            HttpOnly = true,
+            IsEssential = true,
+            Secure = !environment.IsDevelopment(),
+            SameSite = environment.IsDevelopment() ? SameSiteMode.Lax : SameSiteMode.None,
+            Path = "/"
+        });
     }
 }
