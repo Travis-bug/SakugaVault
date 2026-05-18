@@ -14,13 +14,16 @@ The core SakugaVault repository contains no copyrighted media and hosts no video
 
 ## Frontend Experience
 
-The frontend is a decoupled React SPA with these core flows:
+The frontend is a decoupled React SPA housed in `sakugavault-web/` with these implemented core flows:
 
 - Login page for authentication and session entry.
 - Catalog page with a hero banner for the top trending anime.
-- Horizontal genre rails for the top catalog.
+- Horizontal genre rails for the top catalog plus a continue-watching strip.
 - Hidden sidebar navigation for downloads, profile, search, and logout.
-- Watch page with a player container, metadata panel, comments, and similar-anime recommendations.
+- Watch page with a player container, metadata panel, comments, similar-anime recommendations, metadata sync, and queue-download actions.
+- Search page backed by the catalog search endpoint.
+- Downloads page backed by a persisted download queue.
+- Profile page backed by a profile summary endpoint.
 
 ## Backend Architecture
 
@@ -28,7 +31,16 @@ The backend follows a strict thin-controller, fat-service pattern in ASP.NET Cor
 
 - Controllers handle routing, authorization, DTO validation, and HTTP responses.
 - Services contain business logic, data shaping, metadata aggregation, and scraper orchestration.
-- MySQL and EF Core are intended for relational state such as users, comments, watch history, and metadata.
+- MySQL and EF Core are intended for relational state such as users, comments, watch history, downloads, and shadow title mappings.
+
+## Consumet-First Content Path
+
+SakugaVault now treats Consumet as the source of truth for catalog, search, metadata, and playback resolution.
+
+- Home catalog and search results are loaded from live provider feeds through Consumet.
+- The backend tries the configured providers in order and falls back to the next provider when one fails.
+- MySQL is still used for application state and stable local ids, but not as the primary catalog source.
+- A shadow anime row may be created locally so comments, downloads, and watch history can remain relational and stable.
 
 ## Video Delivery Strategy
 
@@ -41,6 +53,7 @@ SakugaVault is designed around HLS playback and explicitly avoids storing video 
 ## Deployment
 
 - The backend and MySQL stack are intended to run through Docker.
+- Consumet is expected to be provided by a self-managed external instance or by a local source tree you already control.
 - Community deployments should be able to start with a simple compose workflow.
 - Early deployments should lean on free tiers, student credits, and low-cost self-hosted infrastructure.
 
@@ -48,13 +61,28 @@ SakugaVault is designed around HLS playback and explicitly avoids storing video 
 
 - Create an untracked `.env` file locally or export the required environment variables in your shell.
 - Required secret-backed values: `JWT_SIGNING_KEY`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`.
+  - In Docker Compose, `JWT_SIGNING_KEY` is forwarded into the API container as `ASPNETCORE_JWT_SIGNINGKEY`.
 - Required database values for compose: `MYSQL_DATABASE`, `MYSQL_USER`, and optionally `MYSQL_HOST_PORT`.
-- `docker-compose up --build` starts the API and MySQL locally.
-- In Development, the API applies EF Core migrations on startup and then runs the development seeder.
+- Required Consumet endpoint value for compose/API containers: `CONSUMET_BASE_URL`.
+- Optional local Consumet source-build port override: `CONSUMET_HOST_PORT`.
+- Runtime auth model: short-lived JWT access tokens plus an `HttpOnly` refresh-token cookie. The refresh cookie is what keeps users signed in across page reloads.
+- `docker-compose up --build` starts MySQL, the API, and the React frontend locally.
+- The API container reads `CONSUMET_BASE_URL` and calls that external/self-managed Consumet instance directly.
+- If you already have a lawful local copy of the Consumet API source in `vendor/consumet`, you can also run `docker compose --profile consumet-local-source up --build` to build and run a local Consumet container from disk.
+- The React client can also be run outside Docker from `sakugavault-web/` when you want a normal local Vite workflow.
+- If you run the API outside Docker, keep a local Consumet-compatible instance available at `http://localhost:3000` or override `Scrapers__ConsumetBaseUrl`.
+- Frontend startup:
+  - `cd sakugavault-web`
+  - `npm install`
+  - `npm run dev`
+- The Vite client serves on `http://localhost:5173` and is already aligned with the backend CORS configuration.
+- If you want the browser to call a non-default API origin directly, set `VITE_API_BASE_URL` in your local shell before starting the frontend.
+- In Development, the API applies EF Core migrations on startup. Seed data only runs if `Catalog:EnableDevelopmentSeedData` is explicitly enabled.
 - Swagger is available at `http://localhost:8080/swagger` when the API is running in Development.
 
 ## Study Docs
 
 - API reference: `docs/API_REFERENCE.md`
 - Backend file guide: `docs/BACKEND_FILE_GUIDE.md`
+- Frontend file guide: `docs/FRONTEND_FILE_GUIDE.md`
 - Migrations guide: `MIGRATIONS.md`

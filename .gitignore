@@ -25,6 +25,14 @@ bld/
 .idea/
 .vscode/
 *.DotSettings.user
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+sakugavault-web/node_modules/
+sakugavault-web/dist/
+sakugavault-web/vite.config.js
+sakugavault-web/vite.config.d.ts
 .env
 .env.*
 !.envrc

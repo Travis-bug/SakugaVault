@@ -10,3 +10,5 @@ docker-compose.yml
 **/*.md
 .DS_Store
 .env
+sakugavault-web/node_modules/
+sakugavault-web/dist/
