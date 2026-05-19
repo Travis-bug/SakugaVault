@@ -1,23 +1,34 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 
 interface VaultBrandProps {
   mode?: "default" | "compact" | "hero";
-  subtitle?: string;
+  subtitle?: string | null;
+  animateWordmark?: boolean;
+  showMark?: boolean;
 }
 
-export function VaultBrand({ mode = "default", subtitle = "Warm signal streaming node" }: VaultBrandProps) {
+export function VaultBrand({
+  mode = "default",
+  subtitle = "Warm signal streaming node",
+  animateWordmark = mode === "hero",
+  showMark = mode !== "hero"
+}: VaultBrandProps) {
   const brandRef = useRef<HTMLDivElement | null>(null);
   const [pulseIndex, setPulseIndex] = useState(0);
 
   useEffect(() => {
+    if (!showMark) {
+      return;
+    }
+
     const intervalId = window.setInterval(() => {
       setPulseIndex((current) => (current + 1) % 6);
     }, 1350);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [showMark]);
 
-  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
     const element = brandRef.current;
     if (!element) {
       return;
@@ -48,40 +59,48 @@ export function VaultBrand({ mode = "default", subtitle = "Warm signal streaming
   return (
     <div
       ref={brandRef}
-      className={`vault-brand vault-brand--${mode}`}
+      className={`vault-brand vault-brand--${mode} ${animateWordmark ? "vault-brand--animated" : ""}`}
       onPointerMove={handlePointerMove}
       onPointerLeave={resetPointerState}
     >
-      <div className="vault-brand__mark" aria-hidden="true">
-        <div className="vault-brand__glow" />
-        <div className="vault-brand__ring vault-brand__ring--outer" />
-        <div className="vault-brand__ring vault-brand__ring--middle" />
-        <div className="vault-brand__ring vault-brand__ring--inner" />
-        <div className="vault-brand__core">
-          <span className="vault-brand__core-dot" />
-        </div>
-        {Array.from({ length: 6 }, (_, index) => (
-          <span
-            key={index}
-            className={`vault-brand__node ${pulseIndex === index ? "is-live" : ""}`}
-            style={{ "--node-index": index } as CSSProperties}
-          />
-        ))}
-        <div className="vault-brand__bars">
-          {Array.from({ length: 3 }, (_, index) => (
+      {showMark ? (
+        <div className="vault-brand__mark" aria-hidden="true">
+          <div className="vault-brand__glow" />
+          <div className="vault-brand__ring vault-brand__ring--outer" />
+          <div className="vault-brand__ring vault-brand__ring--middle" />
+          <div className="vault-brand__ring vault-brand__ring--inner" />
+          <div className="vault-brand__core">
+            <span className="vault-brand__core-dot" />
+          </div>
+          {Array.from({ length: 6 }, (_, index) => (
             <span
               key={index}
-              className={`vault-brand__bar ${pulseIndex % 3 === index ? "is-live" : ""}`}
+              className={`vault-brand__node ${pulseIndex === index ? "is-live" : ""}`}
+              style={{ "--node-index": index } as CSSProperties}
             />
           ))}
+          <div className="vault-brand__bars">
+            {Array.from({ length: 3 }, (_, index) => (
+              <span
+                key={index}
+                className={`vault-brand__bar ${pulseIndex % 3 === index ? "is-live" : ""}`}
+              />
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
       <div className="vault-brand__text">
         <div className="vault-brand__wordmark">
-          <span>Sakuga</span>
-          <span>Vault</span>
+          <span className="vault-brand__wordmark-value" aria-label="Sakuga Vault">
+            <span className="vault-brand__wordmark-part vault-brand__wordmark-part--sakuga">
+              SAKUGA
+            </span>
+            <span className="vault-brand__wordmark-part vault-brand__wordmark-part--vault">
+              VAULT
+            </span>
+          </span>
         </div>
-        <p>{subtitle}</p>
+        {subtitle ? <p>{subtitle}</p> : null}
       </div>
     </div>
   );

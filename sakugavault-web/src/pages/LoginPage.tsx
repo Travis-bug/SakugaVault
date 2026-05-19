@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { isApiError } from "../lib/api";
@@ -18,6 +18,16 @@ const initialLoginState = {
   password: ""
 };
 
+const introDelayMs = 3200;
+
+const loginHighlights = [
+  "Live catalog pulls",
+  "Fast resume memory",
+  "Warm-tech visual system",
+  "Queue continuity",
+  "Signal-led discovery"
+];
+
 export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
@@ -27,10 +37,32 @@ export function LoginPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loginForm, setLoginForm] = useState(initialLoginState);
   const [registerForm, setRegisterForm] = useState(initialRegisterState);
+  const [introComplete, setIntroComplete] = useState(false);
+
+  useEffect(() => {
+    if (introComplete) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIntroComplete(true);
+    }, introDelayMs);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [introComplete]);
+
+  const loginScreenClassName = useMemo(
+    () => `login-screen ${introComplete ? "is-ready" : "is-intro"}`,
+    [introComplete]
+  );
 
   if (!auth.isLoading && auth.isAuthenticated) {
     const destination = (location.state as { from?: string } | null)?.from ?? "/";
     return <Navigate to={destination} replace />;
+  }
+
+  function completeIntro() {
+    setIntroComplete(true);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -61,19 +93,37 @@ export function LoginPage() {
   }
 
   return (
-    <div className="login-screen">
+    <div className={loginScreenClassName}>
       <div className="login-screen__art">
-        <div className="login-screen__art-copy reveal">
-          <VaultBrand mode="hero" subtitle="Cinematic anime relay, tuned for warm signal discovery" />
-          <h2>Provider-fed discovery, resilient sessions, and a vault built to feel alive.</h2>
-          <div className="login-screen__highlights">
-            <span>Live catalog pulls</span>
-            <span>Fast resume memory</span>
-            <span>Warm-tech visual system</span>
+        <video
+          className="login-screen__intro-video"
+          autoPlay
+          muted
+          playsInline
+          preload="auto"
+          onEnded={completeIntro}
+          onError={completeIntro}
+        >
+          <source src="/sakuga-logo-intro.mp4" type="video/mp4" />
+        </video>
+        <div className="login-screen__video-veil" aria-hidden="true" />
+        <div className="login-screen__art-copy">
+          <div className="login-screen__brand-stage">
+            <VaultBrand mode="hero" subtitle={null} animateWordmark={introComplete} showMark={false} />
+            <p className="login-screen__story">
+              Provider-fed discovery, resilient sessions, and a vault built to feel alive. Pick up
+              where you left off, hold onto what matters, and drift back into the catalog without
+              friction.
+            </p>
+            <div className="login-screen__highlights">
+              {loginHighlights.map((highlight) => (
+                <span key={highlight}>{highlight}</span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
-      <div className="login-card reveal">
+      <div className="login-card">
         <span className="eyebrow">Access Node</span>
         <h1>Enter the Vault</h1>
         <p>
