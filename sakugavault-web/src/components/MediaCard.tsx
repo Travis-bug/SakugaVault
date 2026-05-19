@@ -5,7 +5,13 @@ export function MediaCard({ anime, rank }: { anime: AnimeCardDto; rank?: number 
   return (
     <Link to={anime.watchRoute} className="media-card">
       {rank ? <span className="media-card__rank">{String(rank).padStart(2, "0")}</span> : null}
-      <img src={anime.coverImageUrl} alt={anime.title} className="media-card__image" />
+      <img
+        src={anime.coverImageUrl}
+        alt={anime.title}
+        className="media-card__image"
+        loading="lazy"
+        decoding="async"
+      />
       <div className="media-card__scrim" />
       <div className="media-card__overlay">
         <div className="media-card__copy">

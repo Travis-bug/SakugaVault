@@ -16,7 +16,13 @@ export function DownloadQueueCard({
 }: DownloadQueueCardProps) {
   return (
     <article className="queue-card">
-      <img src={item.posterImageUrl} alt={item.animeTitle} className="queue-card__image" />
+      <img
+        src={item.posterImageUrl}
+        alt={item.animeTitle}
+        className="queue-card__image"
+        loading="lazy"
+        decoding="async"
+      />
       <div className="queue-card__body">
         <div className="queue-card__headline">
           <div>

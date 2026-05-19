@@ -97,7 +97,7 @@ export function CatalogPage() {
           <div className="history-strip__row">
             {history.items.map((entry) => (
               <Link key={`${entry.animeId}-${entry.episodeNumber}`} to={`/watch/${entry.animeId}`} className="history-card">
-                <img src={entry.posterImageUrl} alt={entry.animeTitle} />
+                <img src={entry.posterImageUrl} alt={entry.animeTitle} loading="lazy" decoding="async" />
                 <div className="history-card__body">
                   <h3>{entry.animeTitle}</h3>
                   <p>Episode {entry.episodeNumber}</p>

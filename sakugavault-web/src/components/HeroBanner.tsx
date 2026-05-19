@@ -8,6 +8,7 @@ export function HeroBanner({ hero }: { hero: CatalogHeroDto }) {
     : "Once the live catalog locks onto an upstream title, the featured frame will appear here.";
   const backdropImage = hero.backdropImageUrl.trim().length > 0 ? hero.backdropImageUrl : hero.posterImageUrl;
   const hasWatchRoute = hero.watchRoute.trim().length > 0;
+  const hasPosterImage = hero.posterImageUrl.trim().length > 0;
 
   return (
     <section
@@ -47,14 +48,11 @@ export function HeroBanner({ hero }: { hero: CatalogHeroDto }) {
           <span />
         </div>
       </div>
-      <div className="hero-banner__poster">
-        {hero.posterImageUrl ? <img src={hero.posterImageUrl} alt={heroTitle} /> : <div className="hero-banner__poster-fallback" />}
-        <div className="hero-banner__console">
-          <span className="eyebrow">Signal Stack</span>
-          <strong>Live provider relay armed</strong>
-          <p>Catalog pulls, watch-state memory, and fast resume in one interface.</p>
+      {hasPosterImage ? (
+        <div className="hero-banner__poster">
+          <img src={hero.posterImageUrl} alt={heroTitle} loading="eager" decoding="async" />
         </div>
-      </div>
+      ) : null}
     </section>
   );
 }

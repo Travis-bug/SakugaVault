@@ -92,7 +92,7 @@ export function ProfilePage() {
             <div className="profile-history">
               {profile.recentHistory.map((entry) => (
                 <Link key={`${entry.animeId}-${entry.episodeNumber}`} to={`/watch/${entry.animeId}`} className="profile-history__item">
-                  <img src={entry.posterImageUrl} alt={entry.animeTitle} />
+                  <img src={entry.posterImageUrl} alt={entry.animeTitle} loading="lazy" decoding="async" />
                   <div>
                     <strong>{entry.animeTitle}</strong>
                     <p>Episode {entry.episodeNumber}</p>

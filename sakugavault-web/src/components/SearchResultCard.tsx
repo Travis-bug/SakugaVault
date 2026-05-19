@@ -10,7 +10,13 @@ interface SearchResultCardProps {
 export function SearchResultCard({ result, actionArea }: SearchResultCardProps) {
   return (
     <article className="search-card">
-      <img src={result.posterImageUrl} alt={result.title} className="search-card__image" />
+      <img
+        src={result.posterImageUrl}
+        alt={result.title}
+        className="search-card__image"
+        loading="lazy"
+        decoding="async"
+      />
       <div className="search-card__body">
         <div className="search-card__header">
           <div>

@@ -20,6 +20,7 @@ const navigationLinks = [
 export function AppChrome({ eyebrow, title, description, actions, children }: AppChromeProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user } = useAuth();
+  const displayName = user?.displayName?.trim() || "Viewer";
 
   return (
     <div className="shell">
@@ -39,7 +40,7 @@ export function AppChrome({ eyebrow, title, description, actions, children }: Ap
             <span />
           </button>
           <Link to="/" className="topbar__brand-link" aria-label="Go to SakugaVault home">
-            <VaultBrand mode="compact" subtitle="Live anime relay" />
+            <VaultBrand mode="compact" subtitle={null} />
           </Link>
         </div>
         <div className="topbar__right">
@@ -55,8 +56,7 @@ export function AppChrome({ eyebrow, title, description, actions, children }: Ap
             ))}
           </nav>
           <div className="topbar__status">
-            <span className="eyebrow">{eyebrow}</span>
-            <p className="topbar__greeting">{user?.displayName ?? "viewer"}</p>
+            <p className="topbar__greeting">Welcome, {displayName}</p>
           </div>
           <div className="topbar__actions">{actions}</div>
         </div>
@@ -66,11 +66,6 @@ export function AppChrome({ eyebrow, title, description, actions, children }: Ap
           <span className="eyebrow">{eyebrow}</span>
           <h1>{title}</h1>
           <p>{description}</p>
-        </div>
-        <div className="masthead__signal">
-          <span className="masthead__signal-label">Session</span>
-          <strong className="masthead__signal-value">Warm link active</strong>
-          <p>Realtime catalog, queue sync, and watch-state persistence.</p>
         </div>
       </section>
       <main className="content">{children}</main>
