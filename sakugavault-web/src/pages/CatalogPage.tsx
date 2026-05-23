@@ -74,6 +74,7 @@ export function CatalogPage() {
         eyebrow="Catalog"
         title="Home"
         description="No catalog data was returned for this request."
+        showMasthead={false}
       >
         <EmptyState title="Catalog Offline" message={errorMessage ?? "No catalog data was returned."} />
       </AppChrome>
@@ -85,12 +86,14 @@ export function CatalogPage() {
       eyebrow="Catalog"
       title="Home"
       description={`Welcome back, ${user?.displayName ?? "viewer"}. Pick up where you left off or jump into something new.`}
+      showMasthead={false}
     >
-      <HeroBanner hero={catalog.heroBanner} />
+      <HeroBanner
+        heroItems={catalog.heroItems ?? [catalog.heroBanner].filter((item): item is NonNullable<typeof item> => Boolean(item))}
+      />
 
       <section className="history-strip reveal">
         <div className="rail__header">
-          <span className="eyebrow">Resume Queue</span>
           <h2>Continue Watching</h2>
         </div>
         {history && history.items.length > 0 ? (

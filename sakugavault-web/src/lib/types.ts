@@ -48,7 +48,8 @@ export interface GenreRailDto {
 }
 
 export interface HomeCatalogDto {
-  heroBanner: CatalogHeroDto;
+  heroItems: CatalogHeroDto[];
+  heroBanner?: CatalogHeroDto;
   genreRows: GenreRailDto[];
 }
 
