@@ -18,6 +18,7 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    allowedHosts: ["host.docker.internal"],
     port: 5173,
     proxy: {
       "/api": proxyTarget,
