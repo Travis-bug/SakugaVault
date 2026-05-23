@@ -19,12 +19,12 @@ public sealed class CatalogServiceTests
 
         var result = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
 
-        Assert.Equal(string.Empty, result.HeroBanner.Title);
+        Assert.Empty(result.HeroItems);
         Assert.Empty(result.GenreRows);
     }
 
     [Fact]
-    public async Task GetHomeCatalogAsync_WithRankedTitles_SelectsLowestTrendingRankAsHeroBanner()
+    public async Task GetHomeCatalogAsync_WithRankedTitles_ReturnsHeroItemsOrderedByTrendingRank()
     {
         await using var testDatabase = await TestDbContextFactory.CreateAsync();
         await SeedCatalogAsync(testDatabase.DbContext);
@@ -32,7 +32,9 @@ public sealed class CatalogServiceTests
 
         var result = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
 
-        Assert.Equal("One Piece", result.HeroBanner.Title);
+        Assert.Equal(
+            ["One Piece", "Fullmetal Alchemist: Brotherhood", "Kaguya-sama: Love Is War", "Frieren: Beyond Journey's End"],
+            result.HeroItems.Select(item => item.Title).ToArray());
     }
 
     [Fact]
@@ -138,7 +140,7 @@ public sealed class CatalogServiceTests
 
         var secondResult = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
 
-        Assert.Equal(firstResult.HeroBanner.Title, secondResult.HeroBanner.Title);
+        Assert.Equal(firstResult.HeroItems.First().Title, secondResult.HeroItems.First().Title);
     }
 
     [Fact]
@@ -148,7 +150,7 @@ public sealed class CatalogServiceTests
         var providerClient = new StubAnimeProviderClient();
         providerClient.FeedResults["gogoanime"] =
         [
-            new ProviderCatalogTitle("gogoanime", "solo-leveling", "Solo Leveling", "https://images.test/solo.jpg", 12, true, true)
+            new ProviderCatalogTitle("gogoanime", "solo-leveling", "Solo Leveling", "https://images.test/solo.jpg", 12, true, true, ["Action", "Fantasy"])
         ];
         providerClient.InfoResults[("gogoanime", "solo-leveling")] = new ProviderAnimeInfo(
             "gogoanime",
@@ -175,7 +177,7 @@ public sealed class CatalogServiceTests
 
         var result = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
 
-        Assert.Equal("Solo Leveling", result.HeroBanner.Title);
+        Assert.Equal("Solo Leveling", result.HeroItems.First().Title);
         Assert.Contains(result.GenreRows, rail => rail.Genre == "Action");
         Assert.Equal(1, await testDatabase.DbContext.Anime.CountAsync());
     }
@@ -187,7 +189,7 @@ public sealed class CatalogServiceTests
         var providerClient = new StubAnimeProviderClient();
         providerClient.FeedResults["zoro"] =
         [
-            new ProviderCatalogTitle("zoro", "blue-lock", "Blue Lock", "https://images.test/blue-lock.jpg", 24, true, true)
+            new ProviderCatalogTitle("zoro", "blue-lock", "Blue Lock", "https://images.test/blue-lock.jpg", 24, true, true, ["Drama", "Sports"])
         ];
         providerClient.InfoResults[("zoro", "blue-lock")] = new ProviderAnimeInfo(
             "zoro",
@@ -214,7 +216,7 @@ public sealed class CatalogServiceTests
 
         var result = await catalogService.GetHomeCatalogAsync(CancellationToken.None);
 
-        Assert.Equal("Blue Lock", result.HeroBanner.Title);
+        Assert.Equal("Blue Lock", result.HeroItems.First().Title);
         Assert.Contains(providerClient.FeedRequests, request => request.Provider == "gogoanime");
         Assert.Contains(providerClient.FeedRequests, request => request.Provider == "zoro");
     }

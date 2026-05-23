@@ -403,14 +403,10 @@ public sealed class CatalogService(
             return EmptyCatalog();
         }
 
-        var featuredTitle = topAnime[0];
-        var heroBanner = new CatalogHeroDto(
-            featuredTitle.Id.ToString(),
-            featuredTitle.Title,
-            featuredTitle.Synopsis,
-            featuredTitle.PosterImageUrl,
-            featuredTitle.BackdropImageUrl,
-            $"/watch/{featuredTitle.Id}");
+        var heroItems = topAnime
+            .Take(5)
+            .Select(ToHeroItem)
+            .ToArray();
 
         var genreRows = topAnime
             .SelectMany(title => title.AnimeGenres.Select(link => new { Genre = link.Genre.Name, Title = title }))
@@ -424,7 +420,7 @@ public sealed class CatalogService(
                     .ToArray()))
             .ToArray();
 
-        return new HomeCatalogDto(heroBanner, genreRows);
+        return new HomeCatalogDto(heroItems, genreRows);
     }
 
     private async Task<CatalogSearchResponseDto> SearchFromDbAsync(string trimmedQuery, int normalizedLimit, CancellationToken cancellationToken)
@@ -483,14 +479,10 @@ public sealed class CatalogService(
             .ThenBy(title => title.Title)
             .ToArray();
 
-        var featuredTitle = orderedTitles[0];
-        var heroBanner = new CatalogHeroDto(
-            featuredTitle.ShadowAnimeId.ToString(),
-            featuredTitle.Title,
-            featuredTitle.Synopsis,
-            featuredTitle.PosterImageUrl,
-            featuredTitle.BackdropImageUrl,
-            $"/watch/{featuredTitle.ShadowAnimeId}");
+        var heroItems = orderedTitles
+            .Take(5)
+            .Select(ToHeroItem)
+            .ToArray();
 
         var genreRows = orderedTitles
             .SelectMany(title => title.Genres.Select(genre => new { Genre = genre, Title = title }))
@@ -505,20 +497,36 @@ public sealed class CatalogService(
             .Where(rail => rail.Titles.Count > 0)
             .ToArray();
 
-        return new HomeCatalogDto(heroBanner, genreRows);
+        return new HomeCatalogDto(heroItems, genreRows);
     }
 
     private static HomeCatalogDto EmptyCatalog()
     {
         return new HomeCatalogDto(
-            new CatalogHeroDto(
-                Id: string.Empty,
-                Title: string.Empty,
-                Synopsis: string.Empty,
-                PosterImageUrl: string.Empty,
-                BackdropImageUrl: string.Empty,
-                WatchRoute: string.Empty),
+            [],
             []);
+    }
+
+    private static CatalogHeroDto ToHeroItem(Anime title)
+    {
+        return new CatalogHeroDto(
+            title.Id.ToString(),
+            title.Title,
+            title.Synopsis,
+            title.PosterImageUrl,
+            title.BackdropImageUrl,
+            $"/watch/{title.Id}");
+    }
+
+    private static CatalogHeroDto ToHeroItem(LiveCatalogTitle title)
+    {
+        return new CatalogHeroDto(
+            title.ShadowAnimeId.ToString(),
+            title.Title,
+            title.Synopsis,
+            title.PosterImageUrl,
+            title.BackdropImageUrl,
+            $"/watch/{title.ShadowAnimeId}");
     }
 
     private static AnimeCardDto ToAnimeCard(Anime title)
