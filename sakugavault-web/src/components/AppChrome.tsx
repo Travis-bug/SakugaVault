@@ -9,15 +9,15 @@ interface AppChromeProps {
   title: string;
   description: string;
   actions?: ReactNode;
+  showMasthead?: boolean;
   children: ReactNode;
 }
 
 const navigationLinks = [
   { to: "/search", label: "Search" }
-    
 ];
 
-export function AppChrome({ eyebrow, title, description, actions, children }: AppChromeProps) {
+export function AppChrome({ title, description, actions, showMasthead = true, children }: AppChromeProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user } = useAuth();
   const displayName = user?.displayName?.trim() || "Viewer";
@@ -61,13 +61,16 @@ export function AppChrome({ eyebrow, title, description, actions, children }: Ap
           <div className="topbar__actions">{actions}</div>
         </div>
       </header>
-      <section className="masthead reveal">
-        <div className="masthead__copy">
-          <span className="eyebrow">{eyebrow}</span>
-          <h1>{title}</h1>
-          <p>{description}</p>
-        </div>
-      </section>
+      {showMasthead ? (
+        <section className="masthead reveal">
+          <div className="masthead__copy">
+            <h1>{title}</h1>
+            <p>{description}</p>
+          </div>
+        </section>
+      ) : (
+        <h1 className="sr-only">{title}</h1>
+      )}
       <main className="content">{children}</main>
     </div>
   );

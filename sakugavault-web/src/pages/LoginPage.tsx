@@ -106,15 +106,18 @@ export function LoginPage() {
         >
           <source src="/sakuga-logo-intro.mp4" type="video/mp4" />
         </video>
+
         <div className="login-screen__video-veil" aria-hidden="true" />
         <div className="login-screen__art-copy">
           <div className="login-screen__brand-stage">
             <VaultBrand mode="hero" subtitle={null} animateWordmark={introComplete} showMark={false} />
+
             <p className="login-screen__story">
               Provider-fed discovery, resilient sessions, and a vault built to feel alive. Pick up
               where you left off, hold onto what matters, and drift back into the catalog without
               friction.
             </p>
+
             <div className="login-screen__highlights">
               {loginHighlights.map((highlight) => (
                 <span key={highlight}>{highlight}</span>
@@ -123,8 +126,8 @@ export function LoginPage() {
           </div>
         </div>
       </div>
+
       <div className="login-card">
-        <span className="eyebrow">Access Node</span>
         <h1>Enter the Vault</h1>
         <p>
           Sign in to restore your queue, comments, and watch memory across every session.

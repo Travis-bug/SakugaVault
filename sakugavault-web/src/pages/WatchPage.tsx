@@ -402,7 +402,6 @@ export function WatchPage() {
             />
             {!resolvedPlayback?.streamUrl ? (
               <div className="player-frame__overlay">
-                <span className="eyebrow">{isResolving ? "Loading Stream" : "Playback Resolver"}</span>
                 <h2>{isResolving ? "Preparing Episode" : "Episode Source Pending"}</h2>
                 <p>
                   {selectedEpisodeNumber
@@ -417,7 +416,6 @@ export function WatchPage() {
             <div className="episode-browser">
               <div className="episode-browser__header">
                 <div>
-                  <span className="eyebrow">Season Browser</span>
                   <h3>Season and Episode Library</h3>
                 </div>
                 {selectedEpisodeNumber ? <span className="queue-pill">Episode {selectedEpisodeNumber}</span> : null}
@@ -477,7 +475,6 @@ export function WatchPage() {
         </div>
 
         <aside className="watch-stage__meta">
-          <span className="eyebrow">Metadata Deck</span>
           <h2>{watchPage.title}</h2>
           <p>{watchPage.synopsis}</p>
           <dl className="meta-grid">
@@ -539,7 +536,6 @@ export function WatchPage() {
         {activeTab === "comments" ? (
           <div className="comments-grid">
             <form className="comment-form" onSubmit={handlePostComment}>
-              <span className="eyebrow">Discussion</span>
               <h2>Drop a reaction</h2>
               <textarea
                 value={commentBody}

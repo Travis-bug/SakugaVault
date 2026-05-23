@@ -64,23 +64,21 @@ export function SearchPage() {
       eyebrow="Search"
       title="Search"
       description="Search by title or browse what's trending right now."
+      showMasthead={false}
     >
       <section className="search-panel reveal">
         <label className="search-panel__field">
-          <span className="eyebrow">Title Search</span>
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search by title, or genre"
+            aria-label="Search by title or genre"
           />
-          
-          
           <button type="button" className="button button--primary" onClick={() => setQuery("")}>
             Clear
           </button>
         </label>
-        
-        
+
         <div className="search-panel__summary">
           <strong>{payload?.totalResults ?? 0}</strong>
           <span>{query.trim().length > 0 ? "matching titles" : "trending titles"}</span>

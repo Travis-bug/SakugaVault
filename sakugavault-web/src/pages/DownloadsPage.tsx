@@ -148,18 +148,18 @@ export function DownloadsPage() {
       eyebrow="Downloads"
       title="Offline Queue"
       description="Save episodes here for offline handling later."
+      showMasthead={false}
     >
       <section className="downloads-grid">
         <section className="downloads-search reveal">
-          <span className="eyebrow">Quick Add</span>
           <h2>Queue an episode</h2>
           <p>Search for a title, choose an episode and language, then add it to your queue.</p>
           <label className="search-panel__field">
-            <span className="eyebrow">Lookup</span>
             <input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search titles to queue..."
+              aria-label="Search titles to queue"
             />
           </label>
 
@@ -233,7 +233,6 @@ export function DownloadsPage() {
 
         <section className="downloads-queue reveal">
           <div className="rail__header">
-            <span className="eyebrow">Saved Queue</span>
             <h2>{queue.length} queued item{queue.length === 1 ? "" : "s"}</h2>
           </div>
           {statusMessage ? <p className="status-message">{statusMessage}</p> : null}

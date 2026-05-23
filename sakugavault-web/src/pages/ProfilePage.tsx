@@ -69,7 +69,6 @@ export function ProfilePage() {
     >
       <section className="profile-hero reveal">
         <div className="profile-hero__identity">
-          <span className="eyebrow">Current User</span>
           <h2>{profile.user.displayName}</h2>
           <p>@{profile.user.userName}</p>
           <p>{profile.user.email}</p>
@@ -85,7 +84,6 @@ export function ProfilePage() {
       <section className="profile-sections">
         <section className="profile-panel reveal">
           <div className="rail__header">
-            <span className="eyebrow">Recent Watch History</span>
             <h2>Resume Lane</h2>
           </div>
           {profile.recentHistory.length > 0 ? (
@@ -108,7 +106,6 @@ export function ProfilePage() {
 
         <section className="profile-panel reveal">
           <div className="rail__header">
-            <span className="eyebrow">Download Preview</span>
             <h2>Queue Snapshot</h2>
           </div>
           {profile.downloadQueuePreview.length > 0 ? (

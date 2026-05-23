@@ -26,7 +26,6 @@ export function DownloadQueueCard({
       <div className="queue-card__body">
         <div className="queue-card__headline">
           <div>
-            <span className="eyebrow">Queue Item</span>
             <h3>{item.animeTitle}</h3>
           </div>
           <span className="queue-pill">{item.status}</span>
