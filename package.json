@@ -1,7 +1,8 @@
 {
   "scripts": {
     "scraper:start": "node scraper-service/server.js",
-    "scraper:dev": "SCRAPER_LOG_LEVEL=debug node scraper-service/server.js"
+    "scraper:dev": "SCRAPER_LOG_LEVEL=debug node scraper-service/server.js",
+    "scraper:matrix": "node scraper-service/playback-matrix-check.mjs"
   },
   "dependencies": {
     "@consumet/extensions": "^1.8.8"

@@ -123,11 +123,11 @@ app.MapGet("/", () => Results.Ok(new
     docs = "/swagger"
 })).ExcludeFromDescription();
 
-RegisterConsumetStartupCheck(app);
+RegisterScraperStartupChecks(app);
 
 app.Run();
 
-static void RegisterConsumetStartupCheck(WebApplication app)
+static void RegisterScraperStartupChecks(WebApplication app)
 {
     app.Lifetime.ApplicationStarted.Register(() =>
     {
@@ -140,30 +140,46 @@ static void RegisterConsumetStartupCheck(WebApplication app)
                 .GetRequiredService<IOptions<ScraperOptions>>()
                 .Value;
 
-            try
-            {
-                var client = app.Services.GetRequiredService<IHttpClientFactory>().CreateClient("scraper-client");
-                var consumetBaseUrl = scraperOptions.ConsumetBaseUrl.TrimEnd('/');
-                using var response = await client.GetAsync(
-                    $"{consumetBaseUrl}/anime/gogoanime",
-                    app.Lifetime.ApplicationStopping);
+            var configuredResolvers = scraperOptions.PlaybackResolvers
+                .Where(resolver => resolver.Enabled)
+                .Where(resolver => !string.IsNullOrWhiteSpace(resolver.Name))
+                .Where(resolver => Uri.TryCreate(resolver.BaseUrl, UriKind.Absolute, out _))
+                .Select(resolver => (resolver.Name, BaseUrl: resolver.BaseUrl.TrimEnd('/')))
+                .ToArray();
+            var resolvers = configuredResolvers.Length > 0
+                ? configuredResolvers
+                : [("consumet-compatible", scraperOptions.ConsumetBaseUrl.TrimEnd('/'))];
 
-                if (!response.IsSuccessStatusCode)
+            foreach (var resolver in resolvers)
+            {
+                try
+                {
+                    var client = app.Services.GetRequiredService<IHttpClientFactory>().CreateClient("scraper-client");
+                    using var response = await client.GetAsync(
+                        $"{resolver.BaseUrl}/anime/gogoanime",
+                        app.Lifetime.ApplicationStopping);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        continue;
+                    }
+
+                    logger.LogWarning(
+                        "WARNING: Playback resolver {ResolverName} is not reachable at {ResolverBaseUrl}. It will be skipped until the resolver is running.",
+                        resolver.Name,
+                        resolver.BaseUrl);
+                }
+                catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+                {
+                }
+                catch (Exception exception)
                 {
                     logger.LogWarning(
-                        "WARNING: Consumet-compatible scraper is not reachable at {ConsumetBaseUrl}. Playback resolution will fail until the scraper is running.",
-                        consumetBaseUrl);
+                        exception,
+                        "WARNING: Playback resolver {ResolverName} is not reachable at {ResolverBaseUrl}. It will be skipped until the resolver is running.",
+                        resolver.Name,
+                        resolver.BaseUrl);
                 }
-            }
-            catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
-            {
-            }
-            catch (Exception exception)
-            {
-                logger.LogWarning(
-                    exception,
-                    "WARNING: Consumet-compatible scraper is not reachable at {ConsumetBaseUrl}. Playback resolution will fail until the scraper is running.",
-                    scraperOptions.ConsumetBaseUrl.TrimEnd('/'));
             }
         });
     });

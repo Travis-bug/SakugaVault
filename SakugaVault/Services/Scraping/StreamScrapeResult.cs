@@ -12,6 +12,8 @@ public sealed record StreamScrapeResult(
     string Provider,
     string StatusMessage)
 {
+    public string Resolver { get; init; } = string.Empty;
+    public int ResolverPriority { get; init; } = 100;
     public string? AudioLanguage { get; init; }
     public string? SubtitleLanguage { get; init; }
     public string? LanguageWarning { get; init; }

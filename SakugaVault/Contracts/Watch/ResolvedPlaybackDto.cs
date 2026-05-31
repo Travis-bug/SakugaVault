@@ -11,6 +11,7 @@ public sealed record ResolvedPlaybackDto(
     string PreferredProtocol,
     string? StreamUrl,
     string? SourceHost,
+    string? Resolver,
     string? AudioLanguage,
     string? SubtitleLanguage,
     bool UsedFallback,

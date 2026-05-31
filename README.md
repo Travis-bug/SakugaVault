@@ -38,7 +38,8 @@ The backend follows a strict thin-controller, fat-service pattern in ASP.NET Cor
 SakugaVault now uses a small Node scraper service for catalog, search, metadata, and playback resolution. The service exposes the Consumet-compatible routes the backend expects while running `@consumet/extensions` directly.
 
 - Home catalog and search results are loaded from live provider feeds through the scraper service.
-- The backend tries the configured providers in order and falls back to the next provider when one fails.
+- Playback requests fan out across enabled resolver endpoints. Each endpoint resolves its own native episode id and returns independently validated candidates.
+- The backend ranks reachable candidates by the requested audio/subtitle pair, then by the documented language fallback tree.
 - MySQL is still used for application state and stable local ids, but not as the primary catalog source.
 - A shadow anime row may be created locally so comments, downloads, and watch history can remain relational and stable.
 
@@ -64,6 +65,7 @@ SakugaVault is designed around HLS playback and explicitly avoids storing video 
   - In Docker Compose, `JWT_SIGNING_KEY` is forwarded into the API container as `ASPNETCORE_JWT_SIGNINGKEY`.
 - Required database values for compose: `MYSQL_DATABASE`, `MYSQL_USER`, and optionally `MYSQL_HOST_PORT`.
 - Optional scraper endpoint override for compose/API containers: `SCRAPER_BASE_URL`.
+- Additional resolver endpoints can be configured through `Scrapers:PlaybackResolvers`. See `docs/PLAYBACK_RESOLVER_ORCHESTRATION.md`.
 - Optional scraper host port override: `SCRAPER_HOST_PORT`.
 - Runtime auth model: short-lived JWT access tokens plus an `HttpOnly` refresh-token cookie. The refresh cookie is what keeps users signed in across page reloads.
 - `docker-compose up --build` starts MySQL, the API, and the React frontend locally.
@@ -86,4 +88,5 @@ SakugaVault is designed around HLS playback and explicitly avoids storing video 
 - API reference: `docs/API_REFERENCE.md`
 - Backend file guide: `docs/BACKEND_FILE_GUIDE.md`
 - Frontend file guide: `docs/FRONTEND_FILE_GUIDE.md`
+- Playback resolver orchestration: `docs/PLAYBACK_RESOLVER_ORCHESTRATION.md`
 - Migrations guide: `MIGRATIONS.md`

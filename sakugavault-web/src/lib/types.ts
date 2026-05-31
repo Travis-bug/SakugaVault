@@ -128,6 +128,7 @@ export interface ResolvedPlaybackDto {
   preferredProtocol: string;
   streamUrl: string | null;
   sourceHost: string | null;
+  resolver: string | null;
   audioLanguage: string | null;
   subtitleLanguage: string | null;
   usedFallback: boolean;

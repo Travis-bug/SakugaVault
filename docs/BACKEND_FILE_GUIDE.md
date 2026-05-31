@@ -84,7 +84,8 @@ This is the study map for the backend after the MVC-to-API refactor.
  `SakugaVault/Options`
 - Strongly typed configuration classes.
 - `FrontendOptions.cs`: allowed frontend origins for CORS.
-- `ScraperOptions.cs`: Consumet base URL, request timeout, fallback providers, and inter-request delay.
+- `ScraperOptions.cs`: legacy scraper base URL, playback resolver endpoints, request timeout, fallback providers, and inter-request delay.
+- `PlaybackCandidateRanker.cs`: ranks independently resolved playback candidates by exact preference, language fallback order, protocol, and warning state.
 - `JwtOptions.cs`: token issuer, audience, key sourcing, and access-token expiry.
 - `AuthCookieOptions.cs`: refresh-token cookie name and lifetime.
 - `CatalogOptions.cs`: home-catalog cache duration plus the development seeding toggle.

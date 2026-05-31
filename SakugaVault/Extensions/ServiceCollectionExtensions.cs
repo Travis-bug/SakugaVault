@@ -68,11 +68,16 @@ public static class ServiceCollectionExtensions
                 }
             }
 
-            if (Uri.TryCreate(scraperOptions.ConsumetBaseUrl, UriKind.Absolute, out var scraperBaseUri) &&
-                string.Equals(scraperBaseUri.Host, "api.consumet.org", StringComparison.OrdinalIgnoreCase))
+            var scraperBaseUrls = scraperOptions.PlaybackResolvers
+                .Where(resolver => resolver.Enabled)
+                .Select(resolver => resolver.BaseUrl)
+                .Append(scraperOptions.ConsumetBaseUrl);
+            if (scraperBaseUrls.Any(baseUrl =>
+                    Uri.TryCreate(baseUrl, UriKind.Absolute, out var scraperBaseUri) &&
+                    string.Equals(scraperBaseUri.Host, "api.consumet.org", StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidOperationException(
-                    "Production cannot use the public api.consumet.org endpoint. Point Scrapers:ConsumetBaseUrl at your self-hosted Consumet instance.");
+                    "Production cannot use the public api.consumet.org endpoint. Point scraper resolvers at self-hosted or dedicated instances.");
             }
         }
 
@@ -119,6 +124,15 @@ public static class ServiceCollectionExtensions
         services.AddOptions<ScraperOptions>()
             .Bind(configuration.GetSection(ScraperOptions.SectionName))
             .Validate(options => Uri.TryCreate(options.ConsumetBaseUrl, UriKind.Absolute, out _), "Scrapers:ConsumetBaseUrl must be an absolute URL.")
+            .Validate(
+                options => options.PlaybackResolvers.All(resolver =>
+                    !resolver.Enabled ||
+                    (!string.IsNullOrWhiteSpace(resolver.Name) &&
+                     Uri.TryCreate(resolver.BaseUrl, UriKind.Absolute, out _))),
+                "Every enabled Scrapers:PlaybackResolvers entry needs a name and absolute BaseUrl.")
+            .Validate(
+                options => options.PlaybackResolvers.All(resolver => resolver.RequestTimeoutSeconds >= 0),
+                "Scrapers:PlaybackResolvers request timeouts cannot be negative.")
             .Validate(options => options.RequestTimeoutSeconds > 0, "Scrapers:RequestTimeoutSeconds must be greater than zero.")
             .Validate(options => options.InterRequestDelayMilliseconds >= 0, "Scrapers:InterRequestDelayMilliseconds cannot be negative.")
             .ValidateOnStart();

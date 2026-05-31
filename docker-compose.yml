@@ -55,6 +55,10 @@ services:
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}
       Frontend__AllowedOrigins__0: ${FRONTEND_ALLOWED_ORIGIN:-http://localhost:5173}
       Scrapers__ConsumetBaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
+      Scrapers__PlaybackResolvers__0__Name: consumet-local
+      Scrapers__PlaybackResolvers__0__BaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
+      Scrapers__PlaybackResolvers__0__Enabled: "true"
+      Scrapers__PlaybackResolvers__0__Priority: "10"
     ports:
       - "8080:8080"
 

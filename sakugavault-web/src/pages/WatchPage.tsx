@@ -778,7 +778,7 @@ export function WatchPage() {
             <div className="meta-callout">
               <strong>{resolvedPlayback.isResolved ? "Stream ready" : "Resolution incomplete"}</strong>
               <span>
-                {resolvedPlayback.sourceHost ?? "Unknown host"}
+                {[resolvedPlayback.resolver, resolvedPlayback.sourceHost ?? "Unknown host"].filter(Boolean).join(" / ")}
                 {resolvedPlayback.audioLanguage ? ` / audio ${languageLabels[normalizeAudioLanguage(resolvedPlayback.audioLanguage) ?? "ja"]}` : ""}
                 {resolvedPlayback.subtitleLanguage && resolvedPlayback.subtitleLanguage !== "off"
                   ? ` / subtitles ${languageLabels[normalizeSubtitleLanguage(resolvedPlayback.subtitleLanguage) ?? "en"]}`

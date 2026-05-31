@@ -123,6 +123,7 @@ public sealed class PlaybackResolutionService(
                 finalResult.PreferredProtocol,
                 streamUrl,
                 finalResult.SourceHost,
+                finalResult.Resolver,
                 usesUnverifiedLanguageSource
                     ? null
                     : finalResult.AudioLanguage ?? NormalizeAudioLanguage(request.AudioLanguage, request.PreferredLanguage),

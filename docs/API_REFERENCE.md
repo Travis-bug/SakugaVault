@@ -57,7 +57,7 @@ This document explains the current API surface and how each endpoint fits into t
 - Requires authentication.
 - Developer/operator endpoint for warming the local shadow catalog from a live provider feed.
 - Request body: `provider`, `feed`, `pageCount`, `syncMetadata`.
-- Normal use: call this from Swagger after pointing `Scrapers:ConsumetBaseUrl` at a working self-hosted Consumet instance.
+- Normal use: call this from Swagger after configuring at least one working `Scrapers:PlaybackResolvers` endpoint. `Scrapers:ConsumetBaseUrl` remains the legacy single-endpoint fallback.
 - Response: import summary with created/updated counts and per-title results.
 
 `POST /api/catalog/sync-metadata`
