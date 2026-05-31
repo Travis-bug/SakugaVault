@@ -33,11 +33,11 @@ The backend follows a strict thin-controller, fat-service pattern in ASP.NET Cor
 - Services contain business logic, data shaping, metadata aggregation, and scraper orchestration.
 - MySQL and EF Core are intended for relational state such as users, comments, watch history, downloads, and shadow title mappings.
 
-## Consumet-First Content Path
+## Scraper-Backed Content Path
 
-SakugaVault now treats Consumet as the source of truth for catalog, search, metadata, and playback resolution.
+SakugaVault now uses a small Node scraper service for catalog, search, metadata, and playback resolution. The service exposes the Consumet-compatible routes the backend expects while running `@consumet/extensions` directly.
 
-- Home catalog and search results are loaded from live provider feeds through Consumet.
+- Home catalog and search results are loaded from live provider feeds through the scraper service.
 - The backend tries the configured providers in order and falls back to the next provider when one fails.
 - MySQL is still used for application state and stable local ids, but not as the primary catalog source.
 - A shadow anime row may be created locally so comments, downloads, and watch history can remain relational and stable.
@@ -53,7 +53,7 @@ SakugaVault is designed around HLS playback and explicitly avoids storing video 
 ## Deployment
 
 - The backend and MySQL stack are intended to run through Docker.
-- Consumet is expected to be provided by a self-managed external instance or by a local source tree you already control.
+- The scraper service is expected to be run beside the backend locally, in Docker Compose, or as a separately hosted Node service.
 - Community deployments should be able to start with a simple compose workflow.
 - Early deployments should lean on free tiers, student credits, and low-cost self-hosted infrastructure.
 
@@ -63,14 +63,15 @@ SakugaVault is designed around HLS playback and explicitly avoids storing video 
 - Required secret-backed values: `JWT_SIGNING_KEY`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD`.
   - In Docker Compose, `JWT_SIGNING_KEY` is forwarded into the API container as `ASPNETCORE_JWT_SIGNINGKEY`.
 - Required database values for compose: `MYSQL_DATABASE`, `MYSQL_USER`, and optionally `MYSQL_HOST_PORT`.
-- Required Consumet endpoint value for compose/API containers: `CONSUMET_BASE_URL`.
-- Optional local Consumet source-build port override: `CONSUMET_HOST_PORT`.
+- Optional scraper endpoint override for compose/API containers: `SCRAPER_BASE_URL`.
+- Optional scraper host port override: `SCRAPER_HOST_PORT`.
 - Runtime auth model: short-lived JWT access tokens plus an `HttpOnly` refresh-token cookie. The refresh cookie is what keeps users signed in across page reloads.
 - `docker-compose up --build` starts MySQL, the API, and the React frontend locally.
-- The API container reads `CONSUMET_BASE_URL` and calls that external/self-managed Consumet instance directly.
-- If you already have a lawful local copy of the Consumet API source in `vendor/consumet`, you can also run `docker compose --profile consumet-local-source up --build` to build and run a local Consumet container from disk.
+- The API container reads `SCRAPER_BASE_URL` and calls the local `scraper` compose service by default.
+- The old `riimuru/consumet-api` container is still available through the `legacy-consumet` compose profile, but it is no longer used by default.
+- The scraper can also be run outside Docker from the repository root with `npm run scraper:start`.
 - The React client can also be run outside Docker from `sakugavault-web/` when you want a normal local Vite workflow.
-- If you run the API outside Docker, keep a local Consumet-compatible instance available at `http://localhost:3000` or override `Scrapers__ConsumetBaseUrl`.
+- If you run the API outside Docker, keep the scraper service available at `http://localhost:3100` or override `Scrapers__ConsumetBaseUrl`.
 - Frontend startup:
   - `cd sakugavault-web`
   - `npm install`

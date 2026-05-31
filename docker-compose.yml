@@ -18,11 +18,26 @@ services:
       start_period: 20s
 
   consumet:
+    profiles:
+      - legacy-consumet
     platform: linux/amd64
     image: riimuru/consumet-api:latest
     container_name: sakuga_consumet
     ports:
       - "3000:3000"
+    restart: unless-stopped
+
+  scraper:
+    build:
+      context: .
+      dockerfile: scraper-service/Dockerfile
+    environment:
+      PORT: 3100
+      DEFAULT_ANIME_PROVIDER: ${DEFAULT_ANIME_PROVIDER:-animekai}
+      PROVIDER_SEARCH_ORDER: ${PROVIDER_SEARCH_ORDER:-animekai,hianime,animepahe,kickassanime,animeunity,animesaturn,animesama}
+      ALLOW_REGIONAL_LANGUAGE_FALLBACKS: ${ALLOW_REGIONAL_LANGUAGE_FALLBACKS:-false}
+    ports:
+      - "${SCRAPER_HOST_PORT:-3100}:3100"
     restart: unless-stopped
 
   api:
@@ -32,14 +47,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      consumet:
+      scraper:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}
       Frontend__AllowedOrigins__0: ${FRONTEND_ALLOWED_ORIGIN:-http://localhost:5173}
-      Scrapers__ConsumetBaseUrl: ${CONSUMET_BASE_URL:-http://consumet:3000}
+      Scrapers__ConsumetBaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
     ports:
       - "8080:8080"
 

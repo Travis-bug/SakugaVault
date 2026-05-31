@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "scraper:start": "node scraper-service/server.js",
+    "scraper:dev": "SCRAPER_LOG_LEVEL=debug node scraper-service/server.js"
+  },
+  "dependencies": {
+    "@consumet/extensions": "^1.8.8"
+  }
+}

@@ -123,4 +123,48 @@ app.MapGet("/", () => Results.Ok(new
     docs = "/swagger"
 })).ExcludeFromDescription();
 
+RegisterConsumetStartupCheck(app);
+
 app.Run();
+
+static void RegisterConsumetStartupCheck(WebApplication app)
+{
+    app.Lifetime.ApplicationStarted.Register(() =>
+    {
+        _ = Task.Run(async () =>
+        {
+            var logger = app.Services
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("ConsumetStartupCheck");
+            var scraperOptions = app.Services
+                .GetRequiredService<IOptions<ScraperOptions>>()
+                .Value;
+
+            try
+            {
+                var client = app.Services.GetRequiredService<IHttpClientFactory>().CreateClient("scraper-client");
+                var consumetBaseUrl = scraperOptions.ConsumetBaseUrl.TrimEnd('/');
+                using var response = await client.GetAsync(
+                    $"{consumetBaseUrl}/anime/gogoanime",
+                    app.Lifetime.ApplicationStopping);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    logger.LogWarning(
+                        "WARNING: Consumet-compatible scraper is not reachable at {ConsumetBaseUrl}. Playback resolution will fail until the scraper is running.",
+                        consumetBaseUrl);
+                }
+            }
+            catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "WARNING: Consumet-compatible scraper is not reachable at {ConsumetBaseUrl}. Playback resolution will fail until the scraper is running.",
+                    scraperOptions.ConsumetBaseUrl.TrimEnd('/'));
+            }
+        });
+    });
+}

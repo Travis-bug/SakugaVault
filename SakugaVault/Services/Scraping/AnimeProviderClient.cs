@@ -92,29 +92,14 @@ public sealed class AnimeProviderClient(
     var requestUri = $"/{provider}/info/{Uri.EscapeDataString(externalId)}";
     using var response = await SendAsync(requestUri, provider, cancellationToken);
     
-    // 2. If it fails (likely a mismatched Gogoanime ID), we need to search by title instead!
+    // 2. If it fails, keep the failure honest. Playback should never continue with fake episode IDs.
     if (response is null)
     {
-        logger.LogWarning("Direct ID lookup failed. Injecting mock episode data to unblock UI development.");
-        
-        // Inject a fake episode list so the React UI has something to render
-        var mockEpisodes = new List<ProviderEpisodeInfo>
-        {
-            new ProviderEpisodeInfo("mock-id-1", 1, "Episode 1 · UI Test Stream")
-        };
-
-        return new ProviderAnimeInfo(
+        logger.LogWarning(
+            "Direct provider info lookup failed for provider {Provider}, external ID {ExternalId}",
             provider,
-            externalId,
-            "UI Test Anime",
-            "This synopsis is mocked because the upstream provider is currently blocking scrapers. This allows frontend development to continue.",
-            "", // It will fall back to the database poster
-            "", 
-            true,
-            false,
-            1,
-            Array.Empty<string>(),
-            mockEpisodes);
+            externalId);
+        return null;
     }
 
     var body = await response.Content.ReadAsStringAsync(cancellationToken);
