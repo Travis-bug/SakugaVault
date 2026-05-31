@@ -20,6 +20,7 @@ public sealed class WatchController(
     IWatchPageService watchPageService,
     IWatchHistoryService watchHistoryService,
     IPlaybackResolutionService playbackResolutionService,
+    IPlaybackStreamProxyService playbackStreamProxyService,
     IMetadataSyncService metadataSyncService) : ControllerBase
 {
     /// <summary>
@@ -112,6 +113,21 @@ public sealed class WatchController(
         }
 
         return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Proxies a short-lived provider stream URL through the API.
+    /// The stream id is generated only after authenticated playback resolution succeeds.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("streams/{streamId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status206PartialContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ProxyResolvedStream(Guid streamId, CancellationToken cancellationToken)
+    {
+        var proxied = await playbackStreamProxyService.ProxyAsync(streamId, Request, Response, cancellationToken);
+        return proxied ? new EmptyResult() : NotFound();
     }
 
     /// <summary>

@@ -9,4 +9,7 @@ namespace SakugaVault.Contracts.Watch;
 public sealed record PlaybackResolutionRequestDto(
     [param: Range(1, int.MaxValue, ErrorMessage = "Episode number must be at least 1.")] int EpisodeNumber,
     [param: StringLength(16, ErrorMessage = "Preferred language value is too long.")] string PreferredLanguage = "sub",
-    [param: StringLength(64, ErrorMessage = "Provider override value is too long.")] string? ProviderOverride = null);
+    [param: StringLength(64, ErrorMessage = "Provider override value is too long.")] string? ProviderOverride = null,
+    [param: StringLength(16, ErrorMessage = "Audio language value is too long.")] string AudioLanguage = "en",
+    [param: StringLength(16, ErrorMessage = "Subtitle language value is too long.")] string SubtitleLanguage = "en",
+    bool AllowRegionalFallback = false);

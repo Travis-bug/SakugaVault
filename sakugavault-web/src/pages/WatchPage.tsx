@@ -6,6 +6,7 @@ import { LoadingPanel } from "../components/LoadingPanel";
 import { MediaCard } from "../components/MediaCard";
 import { useAuth } from "../auth/AuthContext";
 import { isApiError } from "../lib/api";
+import { resolveApiUrl } from "../lib/config";
 import type {
   CommentDto,
   CommentPostedDto,
@@ -18,6 +19,164 @@ import type {
 
 type WatchTab = "comments" | "similar";
 type HlsInstance = import("hls.js").default;
+type AudioLanguage = "en" | "ja";
+type SubtitleLanguage = "en" | "ja" | "off";
+type MediaTrackLike = { lang?: string; language?: string; label?: string; name?: string };
+
+const AUDIO_LANGUAGE_STORAGE_KEY = "sakugavault.watch.audioLanguage";
+const SUBTITLE_LANGUAGE_STORAGE_KEY = "sakugavault.watch.subtitleLanguage";
+
+const languageLabels: Record<AudioLanguage | SubtitleLanguage, string> = {
+  en: "English",
+  ja: "Japanese",
+  off: "Off"
+};
+
+function readStoredAudioLanguage(): AudioLanguage {
+  if (typeof window === "undefined") {
+    return "en";
+  }
+
+  return normalizeAudioLanguage(window.localStorage.getItem(AUDIO_LANGUAGE_STORAGE_KEY)) ?? "en";
+}
+
+function readStoredSubtitleLanguage(): SubtitleLanguage {
+  if (typeof window === "undefined") {
+    return "en";
+  }
+
+  return normalizeSubtitleLanguage(window.localStorage.getItem(SUBTITLE_LANGUAGE_STORAGE_KEY)) ?? "en";
+}
+
+function normalizeAudioLanguage(value: string | null | undefined): AudioLanguage | null {
+  const normalized = normalizeLanguageCode(value);
+  return normalized === "en" || normalized === "ja" ? normalized : null;
+}
+
+function normalizeSubtitleLanguage(value: string | null | undefined): SubtitleLanguage | null {
+  const normalized = normalizeLanguageCode(value);
+  return normalized === "en" || normalized === "ja" || normalized === "off" ? normalized : null;
+}
+
+function normalizeLanguageCode(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+
+  const baseLanguage = normalized.split("-")[0];
+  switch (baseLanguage) {
+    case "eng":
+    case "english":
+      return "en";
+    case "jpn":
+    case "jp":
+    case "japanese":
+      return "ja";
+    case "none":
+    case "false":
+    case "disabled":
+      return "off";
+    default:
+      return baseLanguage;
+  }
+}
+
+function uniqueLanguages<T extends string>(languages: T[]) {
+  return [...new Set(languages)];
+}
+
+function getAudioLanguageOptions(payload: WatchPageDto | null): AudioLanguage[] {
+  const metadataLanguages = payload?.availableAudioLanguages
+    ?.map(normalizeAudioLanguage)
+    .filter((language): language is AudioLanguage => Boolean(language)) ?? [];
+
+  const fallbackLanguages: AudioLanguage[] = [];
+  if (payload?.dubAvailable) {
+    fallbackLanguages.push("en");
+  }
+
+  if (payload?.subAvailable) {
+    fallbackLanguages.push("ja");
+  }
+
+  return uniqueLanguages([...metadataLanguages, ...fallbackLanguages]).length > 0
+    ? uniqueLanguages([...metadataLanguages, ...fallbackLanguages])
+    : ["ja"];
+}
+
+function getSubtitleLanguageOptions(payload: WatchPageDto | null): SubtitleLanguage[] {
+  const metadataLanguages = payload?.availableSubtitleLanguages
+    ?.map(normalizeSubtitleLanguage)
+    .filter((language): language is SubtitleLanguage => Boolean(language) && language !== "off") ?? [];
+  const fallbackLanguages: SubtitleLanguage[] = payload?.subAvailable ? ["en"] : [];
+
+  return uniqueLanguages([...metadataLanguages, ...fallbackLanguages, "off"]);
+}
+
+function pickAvailableLanguage<T extends string>(current: T, available: T[], fallbacks: T[]) {
+  if (available.includes(current)) {
+    return current;
+  }
+
+  return fallbacks.find((language) => available.includes(language)) ?? available[0] ?? current;
+}
+
+function getTrackLanguage(track: MediaTrackLike) {
+  return normalizeLanguageCode(track.lang ?? track.language ?? track.label ?? track.name);
+}
+
+function findTrackIndex(tracks: MediaTrackLike[], preferred: string, fallbacks: string[]) {
+  const preferredLanguages = uniqueLanguages([preferred, ...fallbacks].filter(Boolean));
+
+  for (const language of preferredLanguages) {
+    const index = tracks.findIndex((track) => getTrackLanguage(track) === language);
+    if (index >= 0) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function applyHlsLanguagePreferences(
+  hlsInstance: HlsInstance,
+  audioLanguage: AudioLanguage,
+  subtitleLanguage: SubtitleLanguage
+) {
+  const audioTracks = (hlsInstance.audioTracks ?? []) as MediaTrackLike[];
+  const audioTrack = findTrackIndex(audioTracks, audioLanguage, audioLanguage === "en" ? ["ja"] : ["en"]);
+  if (audioTrack >= 0) {
+    hlsInstance.audioTrack = audioTrack;
+  }
+
+  const subtitleTracks = (hlsInstance.subtitleTracks ?? []) as MediaTrackLike[];
+  if (subtitleLanguage === "off") {
+    hlsInstance.subtitleTrack = -1;
+    return;
+  }
+
+  const subtitleTrack = findTrackIndex(subtitleTracks, subtitleLanguage, subtitleLanguage === "en" ? ["ja"] : ["en"]);
+  hlsInstance.subtitleTrack = subtitleTrack;
+}
+
+function applyNativeTextTrackPreferences(video: HTMLVideoElement, subtitleLanguage: SubtitleLanguage) {
+  Array.from(video.textTracks).forEach((track) => {
+    if (subtitleLanguage === "off") {
+      track.mode = "disabled";
+      return;
+    }
+
+    const normalizedLanguage = normalizeLanguageCode(track.language || track.label);
+    track.mode = normalizedLanguage === subtitleLanguage ? "showing" : "disabled";
+  });
+}
+
+function formatLanguageList(languages: string[]) {
+  return languages.length > 0
+    ? languages.map((language) => languageLabels[(normalizeLanguageCode(language) || language) as AudioLanguage | SubtitleLanguage] ?? language).join(", ")
+    : "Unavailable";
+}
 
 function formatSyncDate(value: string | null) {
   if (!value) {
@@ -28,6 +187,26 @@ function formatSyncDate(value: string | null) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function isHlsStream(streamUrl: string, preferredProtocol?: string) {
+  return preferredProtocol?.toUpperCase() === "HLS" || /\.m3u8(?:$|\?)/i.test(streamUrl);
+}
+
+function resolveStreamUrl(streamUrl: string) {
+  return streamUrl.startsWith("/api/") ? resolveApiUrl(streamUrl) : streamUrl;
+}
+
+function resolveSubtitleTrackLanguage(language: string) {
+  return normalizeLanguageCode(language) || language;
+}
+
+async function playWhenAllowed(video: HTMLVideoElement) {
+  try {
+    await video.play();
+  } catch {
+    // Browsers may block autoplay until the user interacts.
+  }
 }
 
 function getInitialSelection(payload: WatchPageDto) {
@@ -50,7 +229,9 @@ export function WatchPage() {
   const [resolvedPlayback, setResolvedPlayback] = useState<ResolvedPlaybackDto | null>(null);
   const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
   const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState<number | null>(null);
-  const [preferredLanguage, setPreferredLanguage] = useState<"sub" | "dub">("sub");
+  const [audioLanguage, setAudioLanguage] = useState<AudioLanguage>(readStoredAudioLanguage);
+  const [subtitleLanguage, setSubtitleLanguage] = useState<SubtitleLanguage>(readStoredSubtitleLanguage);
+  const [allowRegionalFallback, setAllowRegionalFallback] = useState(false);
   const [activeTab, setActiveTab] = useState<WatchTab>("comments");
   const [commentBody, setCommentBody] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -113,6 +294,46 @@ export function WatchPage() {
     return watchPage.seasons.find((season) => season.id === selectedSeasonId) ?? watchPage.seasons[0] ?? null;
   }, [watchPage, selectedSeasonId]);
 
+  const audioLanguageOptions = useMemo(() => getAudioLanguageOptions(watchPage), [watchPage]);
+  const subtitleLanguageOptions = useMemo(() => getSubtitleLanguageOptions(watchPage), [watchPage]);
+  const effectiveAudioLanguage = watchPage
+    ? pickAvailableLanguage(audioLanguage, audioLanguageOptions, ["en", "ja"])
+    : audioLanguage;
+  const effectiveSubtitleLanguage = watchPage
+    ? pickAvailableLanguage(subtitleLanguage, subtitleLanguageOptions, ["en", "ja", "off"])
+    : subtitleLanguage;
+  const preferredLanguage: "sub" | "dub" = effectiveAudioLanguage === "en" ? "dub" : "sub";
+
+  useEffect(() => {
+    if (!watchPage) {
+      return;
+    }
+
+    const nextAudioLanguage = pickAvailableLanguage(audioLanguage, audioLanguageOptions, ["en", "ja"]);
+    if (nextAudioLanguage !== audioLanguage) {
+      setAudioLanguage(nextAudioLanguage);
+    }
+  }, [audioLanguage, audioLanguageOptions, watchPage]);
+
+  useEffect(() => {
+    if (!watchPage) {
+      return;
+    }
+
+    const nextSubtitleLanguage = pickAvailableLanguage(subtitleLanguage, subtitleLanguageOptions, ["en", "ja", "off"]);
+    if (nextSubtitleLanguage !== subtitleLanguage) {
+      setSubtitleLanguage(nextSubtitleLanguage);
+    }
+  }, [subtitleLanguage, subtitleLanguageOptions, watchPage]);
+
+  useEffect(() => {
+    window.localStorage.setItem(AUDIO_LANGUAGE_STORAGE_KEY, audioLanguage);
+  }, [audioLanguage]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SUBTITLE_LANGUAGE_STORAGE_KEY, subtitleLanguage);
+  }, [subtitleLanguage]);
+
   useEffect(() => {
     if (!animeId || !watchPage || selectedEpisodeNumber === null) {
       return;
@@ -131,7 +352,10 @@ export function WatchPage() {
           method: "POST",
           body: {
             episodeNumber: selectedEpisodeNumber,
-            preferredLanguage
+            preferredLanguage,
+            audioLanguage: effectiveAudioLanguage,
+            subtitleLanguage: effectiveSubtitleLanguage,
+            allowRegionalFallback
           },
           signal: controller.signal
         });
@@ -159,7 +383,7 @@ export function WatchPage() {
 
     void resolvePlayback();
     return () => controller.abort();
-  }, [animeId, apiRequest, preferredLanguage, selectedEpisodeNumber, watchPage]);
+  }, [allowRegionalFallback, animeId, apiRequest, effectiveAudioLanguage, effectiveSubtitleLanguage, preferredLanguage, selectedEpisodeNumber, watchPage]);
 
   useEffect(() => {
     const streamUrl = resolvedPlayback?.streamUrl;
@@ -167,19 +391,26 @@ export function WatchPage() {
       return;
     }
 
-    const activeStreamUrl = streamUrl;
+    const activeStreamUrl = resolveStreamUrl(streamUrl);
+    const activeProtocol = resolvedPlayback?.preferredProtocol;
     const video = videoRef.current;
     let cancelled = false;
     let hlsInstance: HlsInstance | null = null;
 
     async function attachStream() {
+      if (!isHlsStream(activeStreamUrl, activeProtocol)) {
+        video.src = activeStreamUrl;
+        video.load();
+        applyNativeTextTrackPreferences(video, effectiveSubtitleLanguage);
+        await playWhenAllowed(video);
+        return;
+      }
+
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = activeStreamUrl;
-        try {
-          await video.play();
-        } catch {
-          // Browsers may block autoplay until the user interacts.
-        }
+        video.load();
+        applyNativeTextTrackPreferences(video, effectiveSubtitleLanguage);
+        await playWhenAllowed(video);
         return;
       }
 
@@ -199,10 +430,13 @@ export function WatchPage() {
       hlsInstance.loadSource(activeStreamUrl);
       hlsInstance.attachMedia(videoRef.current);
       hlsInstance.on(Hls.Events.MANIFEST_PARSED, async () => {
-        try {
-          await videoRef.current?.play();
-        } catch {
-          // Browsers may block autoplay until the user interacts.
+        if (hlsInstance) {
+          applyHlsLanguagePreferences(hlsInstance, effectiveAudioLanguage, effectiveSubtitleLanguage);
+        }
+
+        const currentVideo = videoRef.current;
+        if (currentVideo) {
+          await playWhenAllowed(currentVideo);
         }
       });
     }
@@ -214,14 +448,13 @@ export function WatchPage() {
 
       if (hlsInstance) {
         hlsInstance.destroy();
-        return;
       }
 
       video.pause();
       video.removeAttribute("src");
       video.load();
     };
-  }, [resolvedPlayback?.streamUrl]);
+  }, [effectiveAudioLanguage, effectiveSubtitleLanguage, resolvedPlayback?.preferredProtocol, resolvedPlayback?.streamUrl]);
 
   async function saveHistory(positionSeconds: number, durationSeconds: number, completed: boolean) {
     if (!animeId || selectedEpisodeNumber === null) {
@@ -399,7 +632,21 @@ export function WatchPage() {
               onTimeUpdate={handleTimeUpdate}
               onPause={handlePause}
               onEnded={handleEnded}
-            />
+            >
+              {resolvedPlayback?.subtitles?.map((subtitle) => {
+                const subtitleLanguageCode = resolveSubtitleTrackLanguage(subtitle.language);
+                return (
+                  <track
+                    key={`${subtitle.language}-${subtitle.url}`}
+                    kind={subtitle.kind || "subtitles"}
+                    src={resolveStreamUrl(subtitle.url)}
+                    srcLang={subtitleLanguageCode}
+                    label={subtitle.label}
+                    default={normalizeSubtitleLanguage(subtitle.language) === effectiveSubtitleLanguage}
+                  />
+                );
+              })}
+            </video>
             {!resolvedPlayback?.streamUrl ? (
               <div className="player-frame__overlay">
                 <h2>{isResolving ? "Preparing Episode" : "Episode Source Pending"}</h2>
@@ -458,15 +705,39 @@ export function WatchPage() {
 
             <div className="watch-stage__control-bar">
               <label>
-                Language
+                Audio
                 <select
-                  value={preferredLanguage}
-                  onChange={(event) => setPreferredLanguage(event.target.value as "sub" | "dub")}
+                  value={effectiveAudioLanguage}
+                  onChange={(event) => setAudioLanguage(event.target.value as AudioLanguage)}
                 >
-                  <option value="sub">Sub</option>
-                  <option value="dub" disabled={!watchPage.dubAvailable}>
-                    Dub
-                  </option>
+                  {audioLanguageOptions.map((language) => (
+                    <option key={language} value={language}>
+                      {languageLabels[language]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Subtitles
+                <select
+                  value={effectiveSubtitleLanguage}
+                  onChange={(event) => setSubtitleLanguage(event.target.value as SubtitleLanguage)}
+                >
+                  {subtitleLanguageOptions.map((language) => (
+                    <option key={language} value={language}>
+                      {languageLabels[language]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Fallback
+                <select
+                  value={allowRegionalFallback ? "regional" : "strict"}
+                  onChange={(event) => setAllowRegionalFallback(event.target.value === "regional")}
+                >
+                  <option value="strict">English/Japanese only</option>
+                  <option value="regional">Any playable</option>
                 </select>
               </label>
               {statusMessage ? <p className="status-message">{statusMessage}</p> : null}
@@ -487,12 +758,12 @@ export function WatchPage() {
               <dd>{watchPage.episodeCount}</dd>
             </div>
             <div>
-              <dt>Sub</dt>
-              <dd>{watchPage.subAvailable ? "Available" : "Unavailable"}</dd>
+              <dt>Audio</dt>
+              <dd>{formatLanguageList(audioLanguageOptions)}</dd>
             </div>
             <div>
-              <dt>Dub</dt>
-              <dd>{watchPage.dubAvailable ? "Available" : "Unavailable"}</dd>
+              <dt>Subtitles</dt>
+              <dd>{formatLanguageList(subtitleLanguageOptions.filter((language) => language !== "off"))}</dd>
             </div>
             <div>
               <dt>Resolver</dt>
@@ -508,6 +779,10 @@ export function WatchPage() {
               <strong>{resolvedPlayback.isResolved ? "Stream ready" : "Resolution incomplete"}</strong>
               <span>
                 {resolvedPlayback.sourceHost ?? "Unknown host"}
+                {resolvedPlayback.audioLanguage ? ` / audio ${languageLabels[normalizeAudioLanguage(resolvedPlayback.audioLanguage) ?? "ja"]}` : ""}
+                {resolvedPlayback.subtitleLanguage && resolvedPlayback.subtitleLanguage !== "off"
+                  ? ` / subtitles ${languageLabels[normalizeSubtitleLanguage(resolvedPlayback.subtitleLanguage) ?? "en"]}`
+                  : ""}
                 {resolvedPlayback.usedFallback ? " via fallback provider" : ""}
               </span>
             </div>

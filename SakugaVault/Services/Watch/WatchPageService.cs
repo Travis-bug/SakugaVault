@@ -83,6 +83,9 @@ public sealed class WatchPageService(
                 $"/watch/{entry.Id}"))
             .ToArrayAsync(cancellationToken);
 
+        var subAvailable = DetermineSubAvailability(providerInfo, title.SubAvailable);
+        var dubAvailable = DetermineDubAvailability(providerInfo, title.DubAvailable);
+
         var watchPage = new WatchPageDto(
             title.Id.ToString(),
             SelectValue(providerInfo?.Title, title.Title),
@@ -91,8 +94,10 @@ public sealed class WatchPageService(
             SelectValue(providerInfo?.BackdropImageUrl, providerInfo?.PosterImageUrl, title.BackdropImageUrl),
             title.RuntimeMinutes,
             providerInfo?.EpisodeCount ?? providerInfo?.Episodes?.Count ?? title.EpisodeCount,
-            DetermineSubAvailability(providerInfo, title.SubAvailable),
-            DetermineDubAvailability(providerInfo, title.DubAvailable),
+            subAvailable,
+            dubAvailable,
+            BuildAudioLanguages(subAvailable, dubAvailable),
+            BuildSubtitleLanguages(subAvailable),
             title.MetadataLastSyncedAtUtc,
             playback,
             seasons,
@@ -212,5 +217,27 @@ public sealed class WatchPageService(
     private static bool DetermineDubAvailability(ProviderAnimeInfo? providerInfo, bool fallback)
     {
         return providerInfo?.DubAvailable ?? fallback;
+    }
+
+    private static IReadOnlyCollection<string> BuildAudioLanguages(bool subAvailable, bool dubAvailable)
+    {
+        var languages = new List<string>();
+
+        if (dubAvailable)
+        {
+            languages.Add("en");
+        }
+
+        if (subAvailable)
+        {
+            languages.Add("ja");
+        }
+
+        return languages.Count > 0 ? languages : ["ja"];
+    }
+
+    private static IReadOnlyCollection<string> BuildSubtitleLanguages(bool subAvailable)
+    {
+        return subAvailable ? ["en"] : [];
     }
 }

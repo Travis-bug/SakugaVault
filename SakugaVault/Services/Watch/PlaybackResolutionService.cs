@@ -15,6 +15,7 @@ namespace SakugaVault.Services.Watch;
 public sealed class PlaybackResolutionService(
     SakugaVaultDbContext dbContext,
     IStreamScraperService streamScraperService,
+    IPlaybackStreamProxyService playbackStreamProxyService,
     IOptions<ScraperOptions> scraperOptionsAccessor,
     ILogger<PlaybackResolutionService> logger) : IPlaybackResolutionService
 {
@@ -53,6 +54,9 @@ public sealed class PlaybackResolutionService(
                     anime,
                     request.EpisodeNumber,
                     request.PreferredLanguage,
+                    request.AudioLanguage,
+                    request.SubtitleLanguage,
+                    request.AllowRegionalFallback,
                     provider,
                     timeoutCts.Token);
 
@@ -88,7 +92,7 @@ public sealed class PlaybackResolutionService(
             Provider: request.ProviderOverride ?? anime.MetadataProvider ?? "unknown",
             StatusMessage: "No playback providers were configured for this title.");
 
-        if (!finalResult.IsResolved)
+        if (!finalResult.IsResolved && string.IsNullOrWhiteSpace(finalResult.StatusMessage))
         {
             finalResult = finalResult with
             {
@@ -96,16 +100,86 @@ public sealed class PlaybackResolutionService(
             };
         }
 
+        var streamUrl = finalResult.StreamUrl;
+        if (ShouldProxyStream(finalResult))
+        {
+            streamUrl = playbackStreamProxyService.Register(finalResult);
+        }
+
+        var usesUnverifiedLanguageSource = !string.IsNullOrWhiteSpace(finalResult.LanguageWarning);
+        var subtitles = finalResult.SubtitleTracks
+            .Select(track => new PlaybackSubtitleDto(
+                playbackStreamProxyService.RegisterUrl(track.Url, finalResult.SourceRequestHeaders),
+                track.Language,
+                track.Label,
+                track.Kind))
+            .ToArray();
+
         return OperationResult<ResolvedPlaybackDto>.Success(
             new ResolvedPlaybackDto(
                 anime.Id,
                 request.EpisodeNumber,
                 finalResult.IsResolved,
                 finalResult.PreferredProtocol,
-                finalResult.StreamUrl,
+                streamUrl,
                 finalResult.SourceHost,
+                usesUnverifiedLanguageSource
+                    ? null
+                    : finalResult.AudioLanguage ?? NormalizeAudioLanguage(request.AudioLanguage, request.PreferredLanguage),
+                usesUnverifiedLanguageSource
+                    ? null
+                    : finalResult.SubtitleLanguage ?? NormalizeSubtitleLanguage(request.SubtitleLanguage),
                 usedFallback,
+                subtitles,
                 finalResult.StatusMessage));
+    }
+
+    private static string NormalizeAudioLanguage(string audioLanguage, string preferredLanguage)
+    {
+        var normalized = NormalizeLanguageCode(audioLanguage);
+        if (normalized is "en" or "ja")
+        {
+            return normalized;
+        }
+
+        return string.Equals(preferredLanguage, "dub", StringComparison.OrdinalIgnoreCase)
+            ? "en"
+            : "ja";
+    }
+
+    private static string NormalizeSubtitleLanguage(string subtitleLanguage)
+    {
+        var normalized = NormalizeLanguageCode(subtitleLanguage);
+        return normalized is "en" or "ja" or "off" ? normalized : "en";
+    }
+
+    private static string NormalizeLanguageCode(string? language)
+    {
+        var normalized = language?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var baseLanguage = normalized.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+        return baseLanguage switch
+        {
+            "eng" or "english" => "en",
+            "jpn" or "jp" or "japanese" => "ja",
+            "none" or "false" or "disabled" => "off",
+            _ => baseLanguage
+        };
+    }
+
+    private static bool ShouldProxyStream(StreamScrapeResult result)
+    {
+        if (!result.IsResolved || string.IsNullOrWhiteSpace(result.StreamUrl))
+        {
+            return false;
+        }
+
+        return !string.Equals(result.PreferredProtocol, "HLS", StringComparison.OrdinalIgnoreCase) &&
+               !result.StreamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
     }
 
     private IReadOnlyList<string> BuildProviderSequence(string? metadataProvider, string? providerOverride)

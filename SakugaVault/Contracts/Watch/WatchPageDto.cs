@@ -17,6 +17,8 @@ public sealed record WatchPageDto(
     int EpisodeCount,
     bool SubAvailable,
     bool DubAvailable,
+    IReadOnlyCollection<string> AvailableAudioLanguages,
+    IReadOnlyCollection<string> AvailableSubtitleLanguages,
     DateTimeOffset? MetadataLastSyncedAtUtc,
     PlaybackDescriptorDto Playback,
     IReadOnlyCollection<WatchSeasonDto> Seasons,

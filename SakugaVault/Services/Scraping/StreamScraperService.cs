@@ -22,6 +22,9 @@ public sealed class StreamScraperService(
         Anime anime,
         int episodeNumber,
         string preferredLanguage,
+        string audioLanguage,
+        string subtitleLanguage,
+        bool allowRegionalFallback,
         string? providerOverride,
         CancellationToken cancellationToken)
     {
@@ -75,21 +78,36 @@ public sealed class StreamScraperService(
                 StatusMessage: $"Episode {episodeNumber} is out of range for this provider.");
         }
 
+        var watchProvider = string.IsNullOrWhiteSpace(providerInfo.Provider)
+            ? provider
+            : providerInfo.Provider;
+
         var client = httpClientFactory.CreateClient("scraper-client");
-        var watchRequestUri = $"/anime/{Uri.EscapeDataString(provider)}/watch?episodeId={Uri.EscapeDataString(episode.Id)}";
+        var watchRequestUri = BuildWatchRequestUri(
+            scraperOptions.ConsumetBaseUrl,
+            watchProvider,
+            episode.Id,
+            anime.Title,
+            episodeNumber,
+            preferredLanguage,
+            audioLanguage,
+            subtitleLanguage,
+            allowRegionalFallback);
         logger.LogInformation(
-            "Resolving stream sources for anime {AnimeId}, provider {Provider}, episode {EpisodeNumber}, episode ID {EpisodeId}",
+            "Resolving stream sources for anime {AnimeId}, requested provider {RequestedProvider}, watch provider {WatchProvider}, episode {EpisodeNumber}, episode ID {EpisodeId}",
             anime.Id,
             provider,
+            watchProvider,
             episodeNumber,
             episode.Id);
 
         using var watchResponse = await client.GetAsync(watchRequestUri, cancellationToken);
         if (!watchResponse.IsSuccessStatusCode)
         {
+            var errorPayload = await ReadErrorResponseAsync(watchResponse, cancellationToken);
             logger.LogWarning(
                 "Provider {Provider} source lookup for anime {AnimeId}, episode {EpisodeNumber} failed with status code {StatusCode}",
-                provider,
+                watchProvider,
                 anime.Id,
                 episodeNumber,
                 (int)watchResponse.StatusCode);
@@ -98,9 +116,9 @@ public sealed class StreamScraperService(
                 IsResolved: false,
                 PreferredProtocol: "HLS",
                 StreamUrl: null,
-                SourceHost: provider,
-                Provider: provider,
-                StatusMessage: BuildSourceLookupFailureMessage((int)watchResponse.StatusCode));
+                SourceHost: watchProvider,
+                Provider: watchProvider,
+                StatusMessage: errorPayload?.Message ?? BuildSourceLookupFailureMessage((int)watchResponse.StatusCode));
         }
 
         var watchPayload = await watchResponse.Content.ReadFromJsonAsync<ConsumetWatchResponse>(cancellationToken);
@@ -111,25 +129,110 @@ public sealed class StreamScraperService(
                 IsResolved: false,
                 PreferredProtocol: "HLS",
                 StreamUrl: null,
-                SourceHost: provider,
-                Provider: provider,
+                SourceHost: watchProvider,
+                Provider: watchProvider,
                 StatusMessage: "The provider returned no playable sources.");
         }
 
         logger.LogInformation(
             "Resolved stream source for anime {AnimeId}, provider {Provider}, episode {EpisodeNumber}, host {SourceHost}",
             anime.Id,
-            provider,
+            watchProvider,
             episodeNumber,
             source.Server);
+
+        var usesHardcodedLanguageSource = string.Equals(watchPayload?.LanguageSource, "hardcoded", StringComparison.OrdinalIgnoreCase);
 
         return new StreamScrapeResult(
             IsResolved: true,
             PreferredProtocol: source.IsM3U8 ? "HLS" : "HTTP",
             StreamUrl: source.Url,
-            SourceHost: source.Server ?? provider,
-            Provider: provider,
-            StatusMessage: "Playback source resolved successfully.");
+            SourceHost: source.Server ?? watchProvider,
+            Provider: watchProvider,
+            StatusMessage: string.IsNullOrWhiteSpace(watchPayload?.LanguageWarning)
+                ? "Playback source resolved successfully."
+                : $"Playback source resolved successfully. {watchPayload.LanguageWarning}")
+        {
+            AudioLanguage = usesHardcodedLanguageSource
+                ? null
+                : NormalizeAudioLanguage(watchPayload?.AudioLanguage ?? audioLanguage, preferredLanguage),
+            SubtitleLanguage = usesHardcodedLanguageSource
+                ? null
+                : NormalizeSubtitleLanguage(watchPayload?.SubtitleLanguage ?? subtitleLanguage),
+            LanguageWarning = watchPayload?.LanguageWarning,
+            SourceRequestHeaders = watchPayload?.Headers ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            SubtitleTracks = NormalizeSubtitleTracks(watchPayload?.Subtitles)
+        };
+    }
+
+    private static string BuildWatchRequestUri(
+        string consumetBaseUrl,
+        string provider,
+        string episodeId,
+        string animeTitle,
+        int episodeNumber,
+        string preferredLanguage,
+        string audioLanguage,
+        string subtitleLanguage,
+        bool allowRegionalFallback)
+    {
+        var trimmedBaseUrl = consumetBaseUrl.TrimEnd('/');
+        var trimmedProvider = provider.Trim();
+        var escapedEpisodeId = Uri.EscapeDataString(episodeId);
+        var escapedTitle = Uri.EscapeDataString(animeTitle);
+        var normalizedLanguage = NormalizePreferredLanguage(preferredLanguage);
+        var normalizedAudioLanguage = NormalizeAudioLanguage(audioLanguage, normalizedLanguage);
+        var normalizedSubtitleLanguage = NormalizeSubtitleLanguage(subtitleLanguage);
+
+        var path = trimmedProvider.StartsWith("meta/", StringComparison.OrdinalIgnoreCase)
+            ? $"{trimmedBaseUrl}/{trimmedProvider}/watch"
+            : $"{trimmedBaseUrl}/anime/{trimmedProvider}/watch";
+
+        return $"{path}?episodeId={escapedEpisodeId}&preferredLanguage={normalizedLanguage}&audioLanguage={normalizedAudioLanguage}&subtitleLanguage={normalizedSubtitleLanguage}&allowRegionalFallback={allowRegionalFallback.ToString().ToLowerInvariant()}&episodeNumber={episodeNumber}&title={escapedTitle}";
+    }
+
+    private static string NormalizePreferredLanguage(string preferredLanguage)
+    {
+        return string.Equals(preferredLanguage, "dub", StringComparison.OrdinalIgnoreCase)
+            ? "dub"
+            : "sub";
+    }
+
+    private static string NormalizeAudioLanguage(string audioLanguage, string preferredLanguage)
+    {
+        var normalized = NormalizeLanguageCode(audioLanguage);
+        if (normalized is "en" or "ja")
+        {
+            return normalized;
+        }
+
+        return string.Equals(preferredLanguage, "dub", StringComparison.OrdinalIgnoreCase)
+            ? "en"
+            : "ja";
+    }
+
+    private static string NormalizeSubtitleLanguage(string subtitleLanguage)
+    {
+        var normalized = NormalizeLanguageCode(subtitleLanguage);
+        return normalized is "en" or "ja" or "off" ? normalized : "en";
+    }
+
+    private static string NormalizeLanguageCode(string? language)
+    {
+        var normalized = language?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var baseLanguage = normalized.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+        return baseLanguage switch
+        {
+            "eng" or "english" => "en",
+            "jpn" or "jp" or "japanese" => "ja",
+            "none" or "false" or "disabled" => "off",
+            _ => baseLanguage
+        };
     }
 
     private static string BuildSourceLookupFailureMessage(int statusCode)
@@ -142,6 +245,18 @@ public sealed class StreamScraperService(
             >= 500 => "The provider is temporarily unavailable. Another provider will be tried if configured.",
             _ => "This provider could not return a playable source right now."
         };
+    }
+
+    private static async Task<ConsumetErrorResponse?> ReadErrorResponseAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<ConsumetErrorResponse>(cancellationToken);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<ProviderAnimeInfo?> ResolveProviderInfoAsync(
@@ -212,12 +327,53 @@ public sealed class StreamScraperService(
         return int.TryParse(digits, out var value) ? value : 0;
     }
 
+    private static IReadOnlyCollection<StreamSubtitleTrack> NormalizeSubtitleTracks(IReadOnlyCollection<ConsumetSubtitleResponse>? subtitles)
+    {
+        if (subtitles is null || subtitles.Count == 0)
+        {
+            return [];
+        }
+
+        return subtitles
+            .Where(subtitle => !string.IsNullOrWhiteSpace(subtitle.Url))
+            .Select(subtitle => new StreamSubtitleTrack(
+                subtitle.Url!,
+                NormalizeSubtitleTrackLanguage(subtitle.Language),
+                string.IsNullOrWhiteSpace(subtitle.Label) ? NormalizeSubtitleTrackLanguage(subtitle.Language).ToUpperInvariant() : subtitle.Label!,
+                string.IsNullOrWhiteSpace(subtitle.Kind) ? "subtitles" : subtitle.Kind!))
+            .ToArray();
+    }
+
+    private static string NormalizeSubtitleTrackLanguage(string? language)
+    {
+        var normalized = NormalizeLanguageCode(language);
+        return string.IsNullOrWhiteSpace(normalized) ? "unknown" : normalized;
+    }
+
     private sealed record ConsumetWatchResponse(
-        IReadOnlyCollection<ConsumetSourceResponse>? Sources);
+        IReadOnlyDictionary<string, string>? Headers,
+        IReadOnlyCollection<ConsumetSourceResponse>? Sources,
+        string? PreferredLanguage,
+        string? AudioLanguage,
+        string? SubtitleLanguage,
+        string? LanguageSource,
+        string? LanguageWarning,
+        IReadOnlyCollection<ConsumetSubtitleResponse>? Subtitles);
+
+    private sealed record ConsumetErrorResponse(
+        string? Error,
+        string? Message,
+        string? Cause);
 
     private sealed record ConsumetSourceResponse(
         string? Url,
         string? Quality,
         bool IsM3U8,
         string? Server);
+
+    private sealed record ConsumetSubtitleResponse(
+        string? Url,
+        string? Language,
+        string? Label,
+        string? Kind);
 }

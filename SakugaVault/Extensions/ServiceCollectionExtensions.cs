@@ -297,6 +297,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDownloadQueueService, DownloadQueueService>();
         services.AddScoped<IMetadataSyncService, MetadataSyncService>();
         services.AddScoped<IPlaybackResolutionService, PlaybackResolutionService>();
+        services.AddScoped<IPlaybackStreamProxyService, PlaybackStreamProxyService>();
         services.AddScoped<IProfileService, ProfileService>();
         services.AddScoped<IAnimeProviderClient, AnimeProviderClient>();
         services.AddScoped<IStreamScraperService, StreamScraperService>();
@@ -344,6 +345,11 @@ public static class ServiceCollectionExtensions
             client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
         })
         .AddHttpMessageHandler<LoggingDelegatingHandler>();
+
+        services.AddHttpClient("stream-proxy-client", client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(10);
+        });
 
         services.AddTransient<LoggingDelegatingHandler>();
         services.AddScoped<IPasswordHasher<ApplicationUser>, PasswordHasher<ApplicationUser>>();

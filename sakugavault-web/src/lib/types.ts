@@ -112,6 +112,8 @@ export interface WatchPageDto {
   episodeCount: number;
   subAvailable: boolean;
   dubAvailable: boolean;
+  availableAudioLanguages: string[];
+  availableSubtitleLanguages: string[];
   metadataLastSyncedAtUtc: string | null;
   playback: PlaybackDescriptorDto;
   seasons: WatchSeasonDto[];
@@ -126,8 +128,18 @@ export interface ResolvedPlaybackDto {
   preferredProtocol: string;
   streamUrl: string | null;
   sourceHost: string | null;
+  audioLanguage: string | null;
+  subtitleLanguage: string | null;
   usedFallback: boolean;
+  subtitles: PlaybackSubtitleDto[];
   statusMessage: string;
+}
+
+export interface PlaybackSubtitleDto {
+  url: string;
+  language: string;
+  label: string;
+  kind: string;
 }
 
 export interface WatchHistoryEntryDto {

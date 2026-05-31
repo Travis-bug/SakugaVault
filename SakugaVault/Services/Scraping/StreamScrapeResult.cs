@@ -10,4 +10,18 @@ public sealed record StreamScrapeResult(
     string? StreamUrl,
     string? SourceHost,
     string Provider,
-    string StatusMessage);
+    string StatusMessage)
+{
+    public string? AudioLanguage { get; init; }
+    public string? SubtitleLanguage { get; init; }
+    public string? LanguageWarning { get; init; }
+    public IReadOnlyDictionary<string, string> SourceRequestHeaders { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyCollection<StreamSubtitleTrack> SubtitleTracks { get; init; } = [];
+}
+
+public sealed record StreamSubtitleTrack(
+    string Url,
+    string Language,
+    string Label,
+    string Kind);

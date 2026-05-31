@@ -11,5 +11,14 @@ public sealed record ResolvedPlaybackDto(
     string PreferredProtocol,
     string? StreamUrl,
     string? SourceHost,
+    string? AudioLanguage,
+    string? SubtitleLanguage,
     bool UsedFallback,
+    IReadOnlyCollection<PlaybackSubtitleDto> Subtitles,
     string StatusMessage);
+
+public sealed record PlaybackSubtitleDto(
+    string Url,
+    string Language,
+    string Label,
+    string Kind);

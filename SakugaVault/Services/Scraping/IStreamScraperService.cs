@@ -12,6 +12,9 @@ public interface IStreamScraperService
         Anime anime,
         int episodeNumber,
         string preferredLanguage,
+        string audioLanguage,
+        string subtitleLanguage,
+        bool allowRegionalFallback,
         string? providerOverride,
         CancellationToken cancellationToken);
 }
