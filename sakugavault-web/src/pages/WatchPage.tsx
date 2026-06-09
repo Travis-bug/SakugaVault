@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { AppChrome } from "../components/AppChrome";
 import { EmptyState } from "../components/EmptyState";
@@ -22,6 +22,14 @@ type HlsInstance = import("hls.js").default;
 type AudioLanguage = "en" | "ja";
 type SubtitleLanguage = "en" | "ja" | "off";
 type MediaTrackLike = { lang?: string; language?: string; label?: string; name?: string };
+type EpisodeListStatus = "idle" | "loading" | "resolved" | "failed";
+
+interface EpisodeListResponse {
+  isResolved: boolean;
+  providerKey: string;
+  seasons: WatchSeasonDto[];
+  statusMessage?: string | null;
+}
 
 const AUDIO_LANGUAGE_STORAGE_KEY = "sakugavault.watch.audioLanguage";
 const SUBTITLE_LANGUAGE_STORAGE_KEY = "sakugavault.watch.subtitleLanguage";
@@ -221,14 +229,17 @@ function getInitialSelection(payload: WatchPageDto) {
 
 export function WatchPage() {
   const { animeId } = useParams();
-  const { apiRequest, user } = useAuth();
+  const { apiRequest, apiKeepalive, user } = useAuth();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastSavedSecondRef = useRef(0);
   const [watchPage, setWatchPage] = useState<WatchPageDto | null>(null);
   const [comments, setComments] = useState<CommentDto[]>([]);
   const [resolvedPlayback, setResolvedPlayback] = useState<ResolvedPlaybackDto | null>(null);
+  const [providerSeasons, setProviderSeasons] = useState<WatchSeasonDto[] | null>(null);
   const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
   const [selectedEpisodeNumber, setSelectedEpisodeNumber] = useState<number | null>(null);
+  const [playbackRetryNonce, setPlaybackRetryNonce] = useState(0);
+  const [episodeListStatus, setEpisodeListStatus] = useState<EpisodeListStatus>("idle");
   const [audioLanguage, setAudioLanguage] = useState<AudioLanguage>(readStoredAudioLanguage);
   const [subtitleLanguage, setSubtitleLanguage] = useState<SubtitleLanguage>(readStoredSubtitleLanguage);
   const [allowRegionalFallback, setAllowRegionalFallback] = useState(false);
@@ -250,6 +261,10 @@ export function WatchPage() {
         setIsLoading(false);
         return;
       }
+
+      setIsLoading(true);
+      setProviderSeasons(null);
+      setEpisodeListStatus("idle");
 
       try {
         const payload = await apiRequest<WatchPageDto>(`/api/watch/${animeId}`, {
@@ -286,13 +301,55 @@ export function WatchPage() {
     return () => controller.abort();
   }, [animeId, apiRequest]);
 
+  useEffect(() => {
+    if (!animeId || !watchPage) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadEpisodeList() {
+      setEpisodeListStatus("loading");
+
+      try {
+        const response = await apiRequest<EpisodeListResponse>(`/api/watch/${animeId}/episodes`, {
+          signal: controller.signal
+        });
+
+        if (response.isResolved && response.seasons.length > 0) {
+          setProviderSeasons(response.seasons);
+          setEpisodeListStatus("resolved");
+          setSelectedSeasonId((current) =>
+            response.seasons.some((season) => season.id === current)
+              ? current
+              : response.seasons[0]?.id ?? null);
+
+          return;
+        }
+
+        setEpisodeListStatus("failed");
+      } catch (error) {
+        if ((error as Error).name === "AbortError") {
+          return;
+        }
+
+        setEpisodeListStatus("failed");
+      }
+    }
+
+    void loadEpisodeList();
+    return () => controller.abort();
+  }, [animeId, apiRequest, watchPage]);
+
+  const activeSeasonsSource = providerSeasons ?? watchPage?.seasons ?? [];
+
   const selectedSeason = useMemo<WatchSeasonDto | null>(() => {
     if (!watchPage) {
       return null;
     }
 
-    return watchPage.seasons.find((season) => season.id === selectedSeasonId) ?? watchPage.seasons[0] ?? null;
-  }, [watchPage, selectedSeasonId]);
+    return activeSeasonsSource.find((season) => season.id === selectedSeasonId) ?? activeSeasonsSource[0] ?? null;
+  }, [activeSeasonsSource, watchPage, selectedSeasonId]);
 
   const audioLanguageOptions = useMemo(() => getAudioLanguageOptions(watchPage), [watchPage]);
   const subtitleLanguageOptions = useMemo(() => getSubtitleLanguageOptions(watchPage), [watchPage]);
@@ -383,7 +440,40 @@ export function WatchPage() {
 
     void resolvePlayback();
     return () => controller.abort();
-  }, [allowRegionalFallback, animeId, apiRequest, effectiveAudioLanguage, effectiveSubtitleLanguage, preferredLanguage, selectedEpisodeNumber, watchPage]);
+  }, [allowRegionalFallback, animeId, apiRequest, effectiveAudioLanguage, effectiveSubtitleLanguage, playbackRetryNonce, preferredLanguage, selectedEpisodeNumber, watchPage]);
+
+  const flushHistory = useCallback(async () => {
+    try {
+      await apiRequest<void>("/api/watch/history/flush", {
+        method: "POST"
+      });
+    } catch {
+      // Playback telemetry should not interrupt the viewing session.
+    }
+  }, [apiRequest]);
+
+  useEffect(() => {
+    function flushBeforePageHide() {
+      const video = videoRef.current;
+      if (animeId && selectedEpisodeNumber !== null && video) {
+        apiKeepalive("/api/watch/history", {
+          animeId,
+          episodeNumber: selectedEpisodeNumber,
+          positionSeconds: Math.max(0, Math.floor(video.currentTime)),
+          durationSeconds: Math.max(0, Math.floor(video.duration || 0)),
+          completed: video.ended
+        });
+      }
+
+      apiKeepalive("/api/watch/history/flush");
+    }
+
+    window.addEventListener("pagehide", flushBeforePageHide);
+    return () => {
+      flushBeforePageHide();
+      window.removeEventListener("pagehide", flushBeforePageHide);
+    };
+  }, [animeId, apiKeepalive, selectedEpisodeNumber]);
 
   useEffect(() => {
     const streamUrl = resolvedPlayback?.streamUrl;
@@ -489,7 +579,7 @@ export function WatchPage() {
     }
 
     lastSavedSecondRef.current = currentSecond;
-    void saveHistory(video.currentTime, video.duration || 0, false);
+    void saveHistory(video.currentTime, video.duration || 0, false).then(() => flushHistory());
   }
 
   function handlePause() {
@@ -507,7 +597,7 @@ export function WatchPage() {
       return;
     }
 
-    void saveHistory(video.duration || 0, video.duration || 0, true);
+    void saveHistory(video.duration || 0, video.duration || 0, true).then(() => flushHistory());
   }
 
   async function handlePostComment(event: FormEvent<HTMLFormElement>) {
@@ -649,12 +739,37 @@ export function WatchPage() {
             </video>
             {!resolvedPlayback?.streamUrl ? (
               <div className="player-frame__overlay">
-                <h2>{isResolving ? "Preparing Episode" : "Episode Source Pending"}</h2>
-                <p>
-                  {selectedEpisodeNumber
-                    ? `Episode ${selectedEpisodeNumber} is being prepared.`
-                    : "Episode details are still loading for this title."}
-                </p>
+                {isResolving ? (
+                  <>
+                    <h2>Finding Stream</h2>
+                    <p>
+                      {selectedEpisodeNumber
+                        ? `Episode ${selectedEpisodeNumber} is being located across available providers.`
+                        : "Episode details are still loading for this title."}
+                    </p>
+                  </>
+                ) : resolvedPlayback && !resolvedPlayback.isResolved ? (
+                  <>
+                    <h2>Stream Unavailable</h2>
+                    <p>{resolvedPlayback.statusMessage ?? "No providers returned a playable source for this episode."}</p>
+                    <button
+                      type="button"
+                      className="button button--ghost"
+                      onClick={() => setPlaybackRetryNonce((current) => current + 1)}
+                    >
+                      Retry
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h2>Episode Source Pending</h2>
+                    <p>
+                      {selectedEpisodeNumber
+                        ? `Episode ${selectedEpisodeNumber} is being prepared.`
+                        : "Pick an episode from the library to start playback."}
+                    </p>
+                  </>
+                )}
               </div>
             ) : null}
           </div>
@@ -664,14 +779,16 @@ export function WatchPage() {
               <div className="episode-browser__header">
                 <div>
                   <h3>Season and Episode Library</h3>
+                  {episodeListStatus === "loading" ? <span>Syncing episode list...</span> : null}
+                  {episodeListStatus === "failed" ? <span>Episode sync unavailable</span> : null}
                 </div>
                 {selectedEpisodeNumber ? <span className="queue-pill">Episode {selectedEpisodeNumber}</span> : null}
               </div>
 
-              {watchPage.seasons.length > 0 ? (
+              {activeSeasonsSource.length > 0 ? (
                 <>
                   <div className="episode-browser__seasons">
-                    {watchPage.seasons.map((season) => (
+                    {activeSeasonsSource.map((season) => (
                       <button
                         key={season.id}
                         type="button"
