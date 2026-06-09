@@ -1,5 +1,5 @@
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Net.Http.Headers;
+using SakugaVault.Extensions;
 using SakugaVault.Services.Scraping;
 
 namespace SakugaVault.Services.Watch;
@@ -9,8 +9,11 @@ namespace SakugaVault.Services.Watch;
 /// Some upstream MP4 files are not fast-start optimized and stall when the browser's first request is a full-file GET.
 /// </summary>
 public sealed class PlaybackStreamProxyService(
-    IMemoryCache cache,
+    IPlaybackStreamRegistry streamRegistry,
+    IPlaybackSessionService playbackSessionService,
+    IHttpContextAccessor httpContextAccessor,
     IHttpClientFactory httpClientFactory,
+    TimeProvider timeProvider,
     ILogger<PlaybackStreamProxyService> logger) : IPlaybackStreamProxyService
 {
     private static readonly TimeSpan StreamLifetime = TimeSpan.FromMinutes(30);
@@ -33,11 +36,25 @@ public sealed class PlaybackStreamProxyService(
             throw new ArgumentException("A URL is required before registering a playback proxy.", nameof(url));
         }
 
+        var httpContext = httpContextAccessor.HttpContext
+            ?? throw new InvalidOperationException("A playback proxy URL can only be registered during an HTTP request.");
+        var userId = httpContext.User.GetUserId()
+            ?? throw new InvalidOperationException("A playback proxy URL can only be registered for an authenticated user.");
+        var playbackSessionId = playbackSessionService.EnsureSession(httpContext, userId);
         var streamId = Guid.NewGuid();
-        cache.Set(
-            BuildCacheKey(streamId),
-            new ProxiedStream(url, headers ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
-            StreamLifetime);
+
+        var stream = new ProxiedPlaybackStream(
+            url,
+            headers?.ToDictionary(header => header.Key, header => header.Value, StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            userId,
+            playbackSessionId,
+            timeProvider.GetUtcNow());
+
+        if (!streamRegistry.TryRegister(streamId, stream, StreamLifetime))
+        {
+            throw new InvalidOperationException("Playback stream registry is unavailable.");
+        }
 
         return $"/api/watch/streams/{streamId:D}";
     }
@@ -48,7 +65,12 @@ public sealed class PlaybackStreamProxyService(
         HttpResponse response,
         CancellationToken cancellationToken)
     {
-        if (!cache.TryGetValue<ProxiedStream>(BuildCacheKey(streamId), out var stream) || stream is null)
+        if (!streamRegistry.TryGet(streamId, out var stream) || stream is null)
+        {
+            return false;
+        }
+
+        if (!playbackSessionService.IsAuthorized(request.HttpContext, stream))
         {
             return false;
         }
@@ -97,8 +119,6 @@ public sealed class PlaybackStreamProxyService(
         return true;
     }
 
-    private static string BuildCacheKey(Guid streamId) => $"playback-stream:{streamId:D}";
-
     private static void CopyContentHeader(HttpResponseMessage upstreamResponse, HttpResponse response, string headerName)
     {
         if (upstreamResponse.Content.Headers.TryGetValues(headerName, out var contentValues))
@@ -113,7 +133,4 @@ public sealed class PlaybackStreamProxyService(
         }
     }
 
-    private sealed record ProxiedStream(
-        string Url,
-        IReadOnlyDictionary<string, string> Headers);
 }
