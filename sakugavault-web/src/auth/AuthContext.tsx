@@ -1,12 +1,15 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
   useState,
   type ReactNode
 } from "react";
+import { useNavigate } from "react-router-dom";
 import { requestJson, ApiError } from "../lib/api";
+import { resolveApiUrl } from "../lib/config";
 import type {
   AuthResponseDto,
   CurrentUserDto,
@@ -28,6 +31,7 @@ interface AuthContextValue {
   register: (request: RegisterRequestDto) => Promise<void>;
   logout: () => Promise<void>;
   apiRequest: <T>(path: string, options?: AuthorizedRequestOptions) => Promise<T>;
+  apiKeepalive: (path: string, body?: unknown) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -37,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const accessTokenRef = useRef<string | null>(null);
   const refreshPromiseRef = useRef<Promise<string> | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
@@ -95,14 +100,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(response.user);
   }
 
+  const apiKeepalive = useCallback((path: string, body?: unknown) => {
+    const headers = new Headers();
+    headers.set("Accept", "application/json");
+
+    if (body !== undefined) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    if (accessTokenRef.current) {
+      headers.set("Authorization", `Bearer ${accessTokenRef.current}`);
+    }
+
+    fetch(resolveApiUrl(path), {
+      method: "POST",
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: "include",
+      keepalive: true
+    }).catch(() => {
+      // Navigation-time telemetry must not interrupt the user.
+    });
+  }, []);
+
   async function logout() {
     try {
       await requestJson<void>("/api/auth/logout", {
         method: "POST"
       });
     } finally {
+      //clears credentials regradless of server response
       accessTokenRef.current = null;
       setUser(null);
+
+      // Navigate to /login with a clean state object.
+      // replace: true means the watch page (or wherever the user was) is removed
+      // from the browser history stack, so the back button doesn't return them
+      // to a protected page after logout.
+      // state: {} is an explicit empty state so location.state?.from is undefined
+      // on the next login, which sends the new user to / instead of wherever
+      // the previous user was watching.
+      navigate("/login", { replace: true, state: {} });
     }
   }
 
@@ -162,7 +200,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         register,
         logout,
-        apiRequest
+        apiRequest,
+        apiKeepalive
       }}
     >
       {children}
