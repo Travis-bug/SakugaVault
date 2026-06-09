@@ -2,8 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SakugaVault.Contracts.Watch;
 using SakugaVault.Data;
+using SakugaVault.Extensions;
 using SakugaVault.Options;
 using SakugaVault.Services.Common;
+using SakugaVault.Services.Redis;
 using SakugaVault.Services.Scraping;
 
 namespace SakugaVault.Services.Watch;
@@ -16,6 +18,10 @@ public sealed class PlaybackResolutionService(
     SakugaVaultDbContext dbContext,
     IStreamScraperService streamScraperService,
     IPlaybackStreamProxyService playbackStreamProxyService,
+    IStreamCacheService streamCacheService,
+    IScraperRateLimiter scraperRateLimiter,
+    IStreamResolutionLockService streamResolutionLockService,
+    IHttpContextAccessor httpContextAccessor,
     IOptions<ScraperOptions> scraperOptionsAccessor,
     ILogger<PlaybackResolutionService> logger) : IPlaybackResolutionService
 {
@@ -30,6 +36,57 @@ public sealed class PlaybackResolutionService(
         if (anime is null)
         {
             return OperationResult<ResolvedPlaybackDto>.Failure("anime_not_found", "The requested anime could not be found.");
+        }
+
+        var cacheKey = new StreamCacheKey(
+            anime.Id,
+            request.EpisodeNumber,
+            request.PreferredLanguage,
+            request.AudioLanguage,
+            request.SubtitleLanguage,
+            request.AllowRegionalFallback,
+            request.ProviderOverride);
+        var cachedResult = await streamCacheService.GetAsync(cacheKey, cancellationToken);
+        if (cachedResult is not null)
+        {
+            return BuildResolvedPlayback(anime.Id, request, cachedResult, usedFallback: false);
+        }
+
+        var rateLimitResult = await scraperRateLimiter.CheckAsync(BuildRateLimitPartition(), cancellationToken);
+        if (!rateLimitResult.Allowed)
+        {
+            return OperationResult<ResolvedPlaybackDto>.Failure(
+                "scrape_rate_limited",
+                "Too many live playback lookups were requested. Cached playback can still be served; wait before forcing another scrape.",
+                rateLimitResult.RetryAfter);
+        }
+
+        await using var scrapeLock = await streamResolutionLockService.TryAcquireAsync(
+            cacheKey,
+            TimeSpan.FromSeconds(Math.Max(1, scraperOptions.StampedeLockSeconds)),
+            cancellationToken);
+        if (scrapeLock is null)
+        {
+            var inFlightResult = await WaitForCachedResultAsync(cacheKey, cancellationToken);
+            if (inFlightResult is not null)
+            {
+                return BuildResolvedPlayback(anime.Id, request, inFlightResult, usedFallback: false);
+            }
+
+            return OperationResult<ResolvedPlaybackDto>.Success(
+                new ResolvedPlaybackDto(
+                    anime.Id,
+                    request.EpisodeNumber,
+                    false,
+                    "HLS",
+                    null,
+                    null,
+                    "cache-wait",
+                    null,
+                    null,
+                    false,
+                    [],
+                    "This episode is already being prepared. Try again in a moment."));
         }
 
         var attemptedProviders = BuildProviderSequence(anime.MetadataProvider, request.ProviderOverride);
@@ -100,24 +157,69 @@ public sealed class PlaybackResolutionService(
             };
         }
 
+        await streamCacheService.SetAsync(cacheKey, finalResult, cancellationToken);
+        return BuildResolvedPlayback(anime.Id, request, finalResult, usedFallback);
+    }
+
+    private async Task<StreamScrapeResult?> WaitForCachedResultAsync(StreamCacheKey cacheKey, CancellationToken cancellationToken)
+    {
+        var waitUntil = TimeProvider.System.GetUtcNow().AddSeconds(Math.Max(1, scraperOptions.StampedeWaitSeconds));
+        while (TimeProvider.System.GetUtcNow() < waitUntil && !cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken);
+            var result = await streamCacheService.GetAsync(cacheKey, cancellationToken);
+            if (result is not null)
+            {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    private OperationResult<ResolvedPlaybackDto> BuildResolvedPlayback(
+        Guid animeId,
+        PlaybackResolutionRequestDto request,
+        StreamScrapeResult finalResult,
+        bool usedFallback)
+    {
         var streamUrl = finalResult.StreamUrl;
         if (ShouldProxyStream(finalResult))
         {
-            streamUrl = playbackStreamProxyService.Register(finalResult);
+            try
+            {
+                streamUrl = playbackStreamProxyService.Register(finalResult);
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(exception, "Failed to register secure playback proxy for anime {AnimeId}, episode {EpisodeNumber}.", animeId, request.EpisodeNumber);
+                return OperationResult<ResolvedPlaybackDto>.Success(
+                    new ResolvedPlaybackDto(
+                        animeId,
+                        request.EpisodeNumber,
+                        false,
+                        finalResult.PreferredProtocol,
+                        null,
+                        finalResult.SourceHost,
+                        finalResult.Resolver,
+                        null,
+                        null,
+                        usedFallback,
+                        [],
+                        "Playback stream registry is unavailable. Try again in a moment."));
+            }
         }
 
         var usesUnverifiedLanguageSource = !string.IsNullOrWhiteSpace(finalResult.LanguageWarning);
         var subtitles = finalResult.SubtitleTracks
-            .Select(track => new PlaybackSubtitleDto(
-                playbackStreamProxyService.RegisterUrl(track.Url, finalResult.SourceRequestHeaders),
-                track.Language,
-                track.Label,
-                track.Kind))
+            .Select(track => TryBuildSubtitleDto(track, finalResult.SourceRequestHeaders))
+            .Where(track => track is not null)
+            .Select(track => track!)
             .ToArray();
 
         return OperationResult<ResolvedPlaybackDto>.Success(
             new ResolvedPlaybackDto(
-                anime.Id,
+                animeId,
                 request.EpisodeNumber,
                 finalResult.IsResolved,
                 finalResult.PreferredProtocol,
@@ -133,6 +235,35 @@ public sealed class PlaybackResolutionService(
                 usedFallback,
                 subtitles,
                 finalResult.StatusMessage));
+    }
+
+    private PlaybackSubtitleDto? TryBuildSubtitleDto(StreamSubtitleTrack track, IReadOnlyDictionary<string, string> headers)
+    {
+        try
+        {
+            return new PlaybackSubtitleDto(
+                playbackStreamProxyService.RegisterUrl(track.Url, headers),
+                track.Language,
+                track.Label,
+                track.Kind);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Failed to register secure subtitle proxy for {SubtitleLanguage}.", track.Language);
+            return null;
+        }
+    }
+
+    private string BuildRateLimitPartition()
+    {
+        var httpContext = httpContextAccessor.HttpContext;
+        var userId = httpContext?.User.GetUserId();
+        if (userId is not null)
+        {
+            return $"user:{userId.Value:D}";
+        }
+
+        return $"ip:{httpContext?.Connection.RemoteIpAddress?.ToString() ?? "unknown"}";
     }
 
     private static string NormalizeAudioLanguage(string audioLanguage, string preferredLanguage)
