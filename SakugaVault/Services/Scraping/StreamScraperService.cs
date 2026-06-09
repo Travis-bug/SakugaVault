@@ -240,7 +240,7 @@ public sealed class StreamScraperService(
             }
         }
 
-        var searchUri = $"{resolver.BaseUrl.TrimEnd('/')}/{provider.Trim('/')}/{Uri.EscapeDataString(anime.Title)}";
+        var searchUri = $"{resolver.BaseUrl.TrimEnd('/')}/meta/anilist/{Uri.EscapeDataString(anime.Title)}";
         using var searchResponse = await SendAsync(resolver, searchUri, cancellationToken);
         if (!searchResponse.IsSuccessStatusCode)
         {
@@ -260,7 +260,7 @@ public sealed class StreamScraperService(
         string externalId,
         CancellationToken cancellationToken)
     {
-        var infoUri = $"{resolver.BaseUrl.TrimEnd('/')}/{provider.Trim('/')}/info/{Uri.EscapeDataString(externalId)}";
+        var infoUri = $"{resolver.BaseUrl.TrimEnd('/')}/meta/anilist/info/{Uri.EscapeDataString(externalId)}";
         using var response = await SendAsync(resolver, infoUri, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
@@ -324,7 +324,6 @@ public sealed class StreamScraperService(
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.TryAddWithoutValidation(HeaderNames.Range, "bytes=0-2047");
         foreach (var header in headers)
         {
             request.Headers.TryAddWithoutValidation(header.Key, header.Value);
@@ -335,7 +334,8 @@ public sealed class StreamScraperService(
             using var response = await httpClientFactory
                 .CreateClient("stream-proxy-client")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
-            return response.IsSuccessStatusCode;
+            return response.IsSuccessStatusCode
+                || response.StatusCode == System.Net.HttpStatusCode.RangeNotSatisfiable;
         }
         catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
         {
