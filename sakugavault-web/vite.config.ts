@@ -6,6 +6,7 @@ const proxyTarget = process.env.VITE_PROXY_TARGET ?? "http://localhost:8080";
 export default defineConfig({
   plugins: [react()],
   build: {
+    sourcemap: false,
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
