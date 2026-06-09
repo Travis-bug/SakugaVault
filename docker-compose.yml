@@ -48,6 +48,40 @@ services:
       - "${SCRAPER_HOST_PORT:-3100}:3100"
     restart: unless-stopped
 
+  crawlee:
+    build:
+      context: ./crawlee-scrapingbee-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3200
+      # Server-side only. Never reaches the C# API or the browser.
+      SCRAPINGBEE_API_KEY: ${SCRAPINGBEE_API_KEY}
+      TARGET_PROVIDER_NAME: ${CRAWLEE_PROVIDER_NAME:-crawlee_scrapingbee}
+      TARGET_BASE_URL: ${CRAWLEE_TARGET_BASE_URL}
+      SCRAPINGBEE_RENDER_JS: ${SCRAPINGBEE_RENDER_JS:-true}
+      SCRAPINGBEE_PREMIUM_PROXY: ${SCRAPINGBEE_PREMIUM_PROXY:-true}
+    # Internal-only: no host port mapping, so the browser cannot reach it.
+    expose:
+      - "3200"
+    restart: unless-stopped
+
+  scrapy:
+    build:
+      context: ./scrapy-scraperapi-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3300
+      # Server-side only. Never reaches the C# API or the browser.
+      SCRAPERAPI_API_KEY: ${SCRAPERAPI_API_KEY}
+      TARGET_PROVIDER_NAME: ${SCRAPY_PROVIDER_NAME:-scrapy_scraperapi}
+      TARGET_BASE_URL: ${SCRAPY_TARGET_BASE_URL}
+      SCRAPERAPI_RENDER: ${SCRAPERAPI_RENDER:-true}
+      SCRAPERAPI_ULTRA_PREMIUM: ${SCRAPERAPI_ULTRA_PREMIUM:-true}
+    # Internal-only: no host port mapping, so the browser cannot reach it.
+    expose:
+      - "3300"
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -58,6 +92,10 @@ services:
       redis:
         condition: service_started
       scraper:
+        condition: service_started
+      crawlee:
+        condition: service_started
+      scrapy:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development
@@ -70,6 +108,14 @@ services:
       Scrapers__PlaybackResolvers__0__BaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
       Scrapers__PlaybackResolvers__0__Enabled: "true"
       Scrapers__PlaybackResolvers__0__Priority: "10"
+      Scrapers__PlaybackResolvers__1__Name: crawlee-scrapingbee
+      Scrapers__PlaybackResolvers__1__BaseUrl: http://crawlee:3200
+      Scrapers__PlaybackResolvers__1__Enabled: ${CRAWLEE_RESOLVER_ENABLED:-false}
+      Scrapers__PlaybackResolvers__1__Priority: "20"
+      Scrapers__PlaybackResolvers__2__Name: scrapy-scraperapi
+      Scrapers__PlaybackResolvers__2__BaseUrl: http://scrapy:3300
+      Scrapers__PlaybackResolvers__2__Enabled: ${SCRAPY_RESOLVER_ENABLED:-false}
+      Scrapers__PlaybackResolvers__2__Priority: "30"
     ports:
       - "8080:8080"
 
