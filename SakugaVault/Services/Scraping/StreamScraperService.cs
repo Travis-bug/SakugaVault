@@ -335,7 +335,7 @@ public sealed class StreamScraperService(
                 .CreateClient("stream-proxy-client")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
             return response.IsSuccessStatusCode
-                || response.StatusCode == System.Net.HttpStatusCode.RangeNotSatisfiable;
+                || response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable;
         }
         catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
         {
