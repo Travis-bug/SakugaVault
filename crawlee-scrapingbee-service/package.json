@@ -1,0 +1,21 @@
+{
+  "name": "sakugavault-crawlee-scrapingbee",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "JS-heavy playback resolver for SakugaVault. Speaks the same Consumet-compatible contract as scraper-service, but resolves streams by crawling target sites through the ScrapingBee render API.",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "dev": "CRAWLEE_LOG_LEVEL=debug tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "crawlee": "^3.11.5",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
