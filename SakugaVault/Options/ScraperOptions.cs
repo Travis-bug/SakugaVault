@@ -15,6 +15,16 @@ public sealed class ScraperOptions
     public bool EnableHostScrapers { get; init; } = true;
     public string[] FallbackProviders { get; init; } = [];
     public int InterRequestDelayMilliseconds { get; init; } = 500;
+    public int StreamCacheTtlMinutes { get; init; } = 240;
+    public int StampedeLockSeconds { get; init; } = 300;
+    public int StampedeWaitSeconds { get; init; } = 30;
+    public ScraperRateLimitOptions RateLimit { get; init; } = new();
+}
+
+public sealed class ScraperRateLimitOptions
+{
+    public int PermitLimit { get; init; } = 5;
+    public int WindowSeconds { get; init; } = 600;
 }
 
 /// <summary>
