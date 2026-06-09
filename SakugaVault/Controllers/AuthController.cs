@@ -5,6 +5,7 @@ using SakugaVault.Contracts.Auth;
 using SakugaVault.Extensions;
 using SakugaVault.Options;
 using SakugaVault.Services.Auth;
+using SakugaVault.Services.Watch;
 using Microsoft.Extensions.Options;
 
 namespace SakugaVault.Controllers;
@@ -18,7 +19,8 @@ namespace SakugaVault.Controllers;
 public sealed class AuthController(
     IAuthService authService,
     IOptions<AuthCookieOptions> authCookieOptionsAccessor,
-    IHostEnvironment environment) : ControllerBase
+    IHostEnvironment environment,
+    IPlaybackSessionService playbackSessionService) : ControllerBase
 {
     private readonly AuthCookieOptions authCookieOptions = authCookieOptionsAccessor.Value;
 
@@ -69,6 +71,7 @@ public sealed class AuthController(
     }
 
     [AllowAnonymous]
+    [EnableRateLimiting("auth-refresh")]
     [HttpPost("refresh")]
     [ProducesResponseType(typeof(AuthResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -111,6 +114,7 @@ public sealed class AuthController(
         await authService.LogoutAsync(refreshToken, cancellationToken);
         SetNoStoreHeaders();
         ClearRefreshTokenCookie();
+        playbackSessionService.RevokeCurrentSession(HttpContext);
         return NoContent();
     }
 

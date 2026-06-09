@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using SakugaVault.Contracts.Catalog;
 using SakugaVault.Extensions;
 using SakugaVault.Services.Catalog;
@@ -24,6 +25,7 @@ public sealed class CatalogController(
     /// The controller does no shaping beyond delegating to the service and wrapping the result in 200 OK.
     /// </summary>
     [HttpGet("home")]
+    [EnableRateLimiting("catalog-read")]
     [ProducesResponseType(typeof(HomeCatalogDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<HomeCatalogDto>> GetHomeCatalog(CancellationToken cancellationToken)
     {
@@ -32,6 +34,7 @@ public sealed class CatalogController(
     }
 
     [HttpGet("search")]
+    [EnableRateLimiting("catalog-read")]
     [ProducesResponseType(typeof(CatalogSearchResponseDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<CatalogSearchResponseDto>> Search(
         [FromQuery] string? q,
@@ -43,6 +46,7 @@ public sealed class CatalogController(
     }
 
     [HttpPost("comments")]
+    [EnableRateLimiting("write-light")]
     [ProducesResponseType(typeof(CommentPostedDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -80,6 +84,7 @@ public sealed class CatalogController(
     /// This is a developer/operator workflow and is intentionally not exposed in the public React UI.
     /// </summary>
     [HttpPost("import-provider")]
+    [EnableRateLimiting("metadata-sync")]
     [ProducesResponseType(typeof(CatalogImportResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status502BadGateway)]
@@ -106,6 +111,7 @@ public sealed class CatalogController(
     }
 
     [HttpPost("sync-metadata")]
+    [EnableRateLimiting("metadata-sync")]
     [ProducesResponseType(typeof(BatchSyncResultDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<BatchSyncResultDto>> BatchSyncMetadata(BatchSyncRequestDto request, CancellationToken cancellationToken)
     {

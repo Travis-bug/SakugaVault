@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using SakugaVault.Contracts.Downloads;
 using SakugaVault.Extensions;
 using SakugaVault.Services.Downloads;
@@ -16,6 +17,7 @@ namespace SakugaVault.Controllers;
 public sealed class DownloadsController(IDownloadQueueService downloadQueueService) : ControllerBase
 {
     [HttpGet("me")]
+    [EnableRateLimiting("catalog-read")]
     [ProducesResponseType(typeof(IReadOnlyCollection<DownloadQueueItemDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<IReadOnlyCollection<DownloadQueueItemDto>>> GetMyQueue(CancellationToken cancellationToken)
@@ -31,6 +33,7 @@ public sealed class DownloadsController(IDownloadQueueService downloadQueueServi
     }
 
     [HttpPost]
+    [EnableRateLimiting("write-light")]
     [ProducesResponseType(typeof(DownloadQueueItemDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -64,6 +67,7 @@ public sealed class DownloadsController(IDownloadQueueService downloadQueueServi
     }
 
     [HttpDelete("{downloadId:guid}")]
+    [EnableRateLimiting("write-light")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
