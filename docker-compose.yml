@@ -27,6 +27,14 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - sakugavault-redis-data:/data
+    restart: unless-stopped
+
   scraper:
     build:
       context: .
@@ -47,11 +55,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_started
       scraper:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
+      Redis__ConnectionString: redis:6379
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}
       Frontend__AllowedOrigins__0: ${FRONTEND_ALLOWED_ORIGIN:-http://localhost:5173}
       Scrapers__ConsumetBaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
@@ -72,7 +83,8 @@ services:
     environment:
       VITE_PROXY_TARGET: http://api:8080
     ports:
-      - "5173:5173"
+      - "5173:80"
 
 volumes:
   sakugavault-mysql-data:
+  sakugavault-redis-data:
