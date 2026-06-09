@@ -14,7 +14,8 @@ namespace SakugaVault.Services.Watch;
 /// </summary>
 public sealed class WatchHistoryService(
     SakugaVaultDbContext dbContext,
-    TimeProvider timeProvider) : IWatchHistoryService
+    TimeProvider timeProvider,
+    IWatchProgressBuffer watchProgressBuffer) : IWatchHistoryService
 {
     public async Task<CursorPagedResult<WatchHistoryEntryDto>> GetUserHistoryAsync(
         Guid userId,
@@ -84,6 +85,30 @@ public sealed class WatchHistoryService(
             return OperationResult<WatchHistoryEntryDto>.Failure("anime_not_found", "The requested anime could not be found.");
         }
 
+        var now = timeProvider.GetUtcNow();
+        var bufferedEntry = new WatchProgressEntry(
+            userId,
+            request.AnimeId,
+            request.EpisodeNumber,
+            request.PositionSeconds,
+            request.DurationSeconds,
+            request.Completed,
+            now);
+
+        if (await watchProgressBuffer.WriteAsync(bufferedEntry, cancellationToken))
+        {
+            return OperationResult<WatchHistoryEntryDto>.Success(
+                new WatchHistoryEntryDto(
+                    historyContext.Id,
+                    historyContext.Title,
+                    historyContext.PosterImageUrl,
+                    request.EpisodeNumber,
+                    request.PositionSeconds,
+                    request.DurationSeconds,
+                    request.Completed,
+                    now));
+        }
+
         var existingEntry = historyContext.ExistingEntry;
 
         if (existingEntry is null)
@@ -101,7 +126,7 @@ public sealed class WatchHistoryService(
         existingEntry.PositionSeconds = request.PositionSeconds;
         existingEntry.DurationSeconds = request.DurationSeconds;
         existingEntry.Completed = request.Completed;
-        existingEntry.LastWatchedAtUtc = timeProvider.GetUtcNow();
+        existingEntry.LastWatchedAtUtc = now;
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
