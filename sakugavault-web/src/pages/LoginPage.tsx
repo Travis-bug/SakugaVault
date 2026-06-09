@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { isApiError } from "../lib/api";
@@ -19,6 +19,7 @@ const initialLoginState = {
 };
 
 const introDelayMs = 3200;
+const errorAutoDismissMs = 10_000;
 
 const loginHighlights = [
   "Live catalog pulls",
@@ -38,6 +39,7 @@ export function LoginPage() {
   const [loginForm, setLoginForm] = useState(initialLoginState);
   const [registerForm, setRegisterForm] = useState(initialRegisterState);
   const [introComplete, setIntroComplete] = useState(false);
+  const errorDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (introComplete) {
@@ -51,12 +53,39 @@ export function LoginPage() {
     return () => window.clearTimeout(timeoutId);
   }, [introComplete]);
 
+
+  // Auto-dismiss the error banner after 10 seconds.
+  // The timer is reset whenever a new error appears.
+  // It is also cancelled if the user dismisses the error manually or
+  // the component unmounts.
+  useEffect(() => {
+    if (errorDismissTimerRef.current) {
+      clearTimeout(errorDismissTimerRef.current);
+      errorDismissTimerRef.current = null;
+    }
+
+    if (errorMessage) {
+      errorDismissTimerRef.current = setTimeout(() => {
+        setErrorMessage(null);
+      }, errorAutoDismissMs);
+    }
+
+    return () => {
+      if (errorDismissTimerRef.current) {
+        clearTimeout(errorDismissTimerRef.current);
+      }
+    };
+  }, [errorMessage]);
+  
+  
   const loginScreenClassName = useMemo(
     () => `login-screen ${introComplete ? "is-ready" : "is-intro"}`,
     [introComplete]
   );
 
   if (!auth.isLoading && auth.isAuthenticated) {
+    // After logout, location.state is explicitly set to {} so .from is undefined,
+    // which means the user always land on "/" for a freshly logged-in session.
     const destination = (location.state as { from?: string } | null)?.from ?? "/";
     return <Navigate to={destination} replace />;
   }
@@ -64,6 +93,15 @@ export function LoginPage() {
   function completeIntro() {
     setIntroComplete(true);
   }
+
+
+  function handleModeChange(next: AuthMode) {
+    // Clear the error banner immediately when the user switches between
+    // Sign In and Create Account so stale errors don't bleed across modes.
+    setErrorMessage(null);
+    setMode(next);
+  }
+
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -77,6 +115,10 @@ export function LoginPage() {
         await auth.register(registerForm);
       }
 
+      
+      // After a successful login or register, navigate to the intended destination.
+      // location.state?.from is only set when ProtectedRoute redirected here,
+      // and is explicitly cleared to {} on logout so a new user always gets "/".
       const destination = (location.state as { from?: string } | null)?.from ?? "/";
       navigate(destination, { replace: true });
     } catch (error) {
