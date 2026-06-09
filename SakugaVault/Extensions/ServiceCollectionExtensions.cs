@@ -20,9 +20,12 @@ using SakugaVault.Services.Catalog;
 using SakugaVault.Services.Downloads;
 using SakugaVault.Services.Metadata;
 using SakugaVault.Services.Profile;
+using SakugaVault.Services.Redis;
 using SakugaVault.Services.Scraping;
 using SakugaVault.Services.Users;
 using SakugaVault.Services.Watch;
+using SakugaVault.Workers;
+using StackExchange.Redis;
 
 namespace SakugaVault.Extensions;
 
@@ -135,6 +138,15 @@ public static class ServiceCollectionExtensions
                 "Scrapers:PlaybackResolvers request timeouts cannot be negative.")
             .Validate(options => options.RequestTimeoutSeconds > 0, "Scrapers:RequestTimeoutSeconds must be greater than zero.")
             .Validate(options => options.InterRequestDelayMilliseconds >= 0, "Scrapers:InterRequestDelayMilliseconds cannot be negative.")
+            .Validate(options => options.StreamCacheTtlMinutes > 0, "Scrapers:StreamCacheTtlMinutes must be greater than zero.")
+            .Validate(options => options.StampedeLockSeconds > 0, "Scrapers:StampedeLockSeconds must be greater than zero.")
+            .Validate(options => options.StampedeWaitSeconds > 0, "Scrapers:StampedeWaitSeconds must be greater than zero.")
+            .Validate(options => options.RateLimit.PermitLimit > 0, "Scrapers:RateLimit:PermitLimit must be greater than zero.")
+            .Validate(options => options.RateLimit.WindowSeconds > 0, "Scrapers:RateLimit:WindowSeconds must be greater than zero.")
+            .ValidateOnStart();
+        services.AddOptions<RedisOptions>()
+            .Bind(configuration.GetSection(RedisOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.ConnectionString), "Redis:ConnectionString is required.")
             .ValidateOnStart();
         services.AddOptions<CatalogOptions>()
             .Bind(configuration.GetSection(CatalogOptions.SectionName))
@@ -247,6 +259,36 @@ public static class ServiceCollectionExtensions
                         Window = TimeSpan.FromMinutes(10),
                         QueueLimit = 0
                     }));
+
+            options.AddPolicy("auth-refresh", httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    BuildRateLimitPartitionKey(httpContext),
+                    _ => BuildFixedWindowOptions(30, TimeSpan.FromMinutes(1))));
+
+            options.AddPolicy("catalog-read", httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    BuildRateLimitPartitionKey(httpContext),
+                    _ => BuildFixedWindowOptions(120, TimeSpan.FromMinutes(1))));
+
+            options.AddPolicy("write-light", httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    BuildRateLimitPartitionKey(httpContext),
+                    _ => BuildFixedWindowOptions(30, TimeSpan.FromMinutes(1))));
+
+            options.AddPolicy("playback-resolve", httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    BuildRateLimitPartitionKey(httpContext),
+                    _ => BuildFixedWindowOptions(30, TimeSpan.FromMinutes(1))));
+
+            options.AddPolicy("stream-proxy", httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    _ => BuildFixedWindowOptions(1200, TimeSpan.FromMinutes(1))));
+
+            options.AddPolicy("metadata-sync", httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    BuildRateLimitPartitionKey(httpContext),
+                    _ => BuildFixedWindowOptions(10, TimeSpan.FromMinutes(10))));
         });
 
         services.AddCors(options =>
@@ -312,13 +354,22 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMetadataSyncService, MetadataSyncService>();
         services.AddScoped<IPlaybackResolutionService, PlaybackResolutionService>();
         services.AddScoped<IPlaybackStreamProxyService, PlaybackStreamProxyService>();
+        services.AddSingleton<IPlaybackSessionService, PlaybackSessionService>();
+        services.AddSingleton<IPlaybackStreamRegistry, RedisPlaybackStreamRegistry>();
         services.AddScoped<IProfileService, ProfileService>();
         services.AddScoped<IAnimeProviderClient, AnimeProviderClient>();
+        services.AddSingleton<IStreamCacheService, StreamCacheService>();
+        services.AddSingleton<IScraperRateLimiter, RedisScraperRateLimiter>();
+        services.AddSingleton<IStreamResolutionLockService, RedisStreamResolutionLockService>();
         services.AddScoped<IStreamScraperService, StreamScraperService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IWatchHistoryService, WatchHistoryService>();
+        services.AddSingleton<IWatchProgressBuffer, RedisWatchProgressBuffer>();
+        services.AddScoped<IWatchProgressFlushService, WatchProgressFlushService>();
         services.AddScoped<IWatchPageService, WatchPageService>();
+        services.AddScoped<IEpisodeListService, EpisodeListService>();
         services.AddScoped<SakugaVaultSeeder>();
+        services.AddHostedService<WatchProgressFlushWorker>();
 
         return services;
     }
@@ -342,6 +393,16 @@ public static class ServiceCollectionExtensions
         {
             options.UseMySQL(connectionString);
         });
+
+        services.AddSingleton<IConnectionMultiplexer>(_ =>
+        {
+            var redisConnectionString = configuration.GetSection(RedisOptions.SectionName)
+                .Get<RedisOptions>()?.ConnectionString ?? new RedisOptions().ConnectionString;
+            var redisConfiguration = ConfigurationOptions.Parse(redisConnectionString);
+            redisConfiguration.AbortOnConnectFail = false;
+            return ConnectionMultiplexer.Connect(redisConfiguration);
+        });
+        services.AddHostedService<RedisStartupCheckService>();
 
         services.AddHttpClient("scraper-client", client =>
         {
@@ -413,4 +474,20 @@ public static class ServiceCollectionExtensions
 
         return jwtOptions;
     }
+
+    private static string BuildRateLimitPartitionKey(HttpContext httpContext)
+    {
+        var userId = httpContext.User.GetUserId();
+        return userId is not null
+            ? $"user:{userId.Value:D}"
+            : $"ip:{httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown"}";
+    }
+
+    private static FixedWindowRateLimiterOptions BuildFixedWindowOptions(int permitLimit, TimeSpan window) =>
+        new()
+        {
+            PermitLimit = permitLimit,
+            Window = window,
+            QueueLimit = 0
+        };
 }

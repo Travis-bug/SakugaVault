@@ -108,8 +108,8 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseHttpsRedirection();
 app.UseRouting();
 app.UseCors(CorsPolicyNames.Frontend);
-app.UseRateLimiter();
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 
 // Controllers are the HTTP entry points, but business logic stays in services.
