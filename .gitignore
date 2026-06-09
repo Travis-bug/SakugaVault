@@ -41,3 +41,9 @@ sakugavault-web/vite.config.d.ts
 *.secrets.json
 appsettings.Local.json
 appsettings.*.Local.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
