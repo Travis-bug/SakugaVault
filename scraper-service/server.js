@@ -26,7 +26,7 @@ const defaultProviderKey = normalizeProviderKey(process.env.DEFAULT_ANIME_PROVID
 const providerSearchOrder = parseCsv(process.env.PROVIDER_SEARCH_ORDER)
   .map(normalizeProviderKey)
   .filter(Boolean);
-const episodeInfoTimeoutMs = Number.parseInt(process.env.EPISODE_INFO_TIMEOUT_MS || '20000', 10);
+const episodeInfoTimeoutMs = Number.parseInt(process.env.EPISODE_INFO_TIMEOUT_MS || '8000', 10);
 const sourceTimeoutMs = Number.parseInt(process.env.SOURCE_TIMEOUT_MS || '20000', 10);
 const providerFallbackTimeoutMs = Number.parseInt(process.env.PROVIDER_FALLBACK_TIMEOUT_MS || '5000', 10);
 const cacheTtlMs = Number.parseInt(process.env.SCRAPER_CACHE_TTL_MS || '300000', 10);
@@ -661,7 +661,7 @@ async function resolveEpisodeBundle(anilist, anilistId, title) {
   try {
     const episodes = await withTimeout(
       anilist.fetchEpisodesListById(anilistId),
-      episodeInfoTimeoutMs,
+      5_000,
       `Timed out while mapping AniList ID ${anilistId} to provider episodes.`
     );
 
@@ -672,40 +672,41 @@ async function resolveEpisodeBundle(anilist, anilistId, title) {
       };
     }
   } catch (error) {
-    log('warn', 'AniList episode mapping failed; trying direct provider search.', {
+    log('warn', 'AniList episode mapping failed; trying parallel provider search.', {
       anilistId,
       title,
       message: error.message
     });
   }
 
-  return await findProviderEpisodes(title);
+  return await findProviderEpisodesParallel(title);
 }
 
-async function findProviderEpisodes(title, excludedProviderKeys = []) {
+async function findProviderEpisodesParallel(title, excludedProviderKeys = []) {
   const excludedProviders = new Set(excludedProviderKeys.map(normalizeProviderKey));
+  const candidateProviders = getProviderSearchOrder().filter(providerKey => !excludedProviders.has(providerKey));
 
-  for (const providerKey of getProviderSearchOrder()) {
-    if (excludedProviders.has(providerKey)) {
-      continue;
-    }
+  if (candidateProviders.length === 0) {
+    return { providerKey: defaultProviderKey, episodes: [] };
+  }
 
+  const providerAttempts = candidateProviders.map(async providerKey => {
     try {
       const provider = createAnimeProvider(providerKey);
       const search = await withTimeout(
         provider.search(title, 1),
-        episodeInfoTimeoutMs,
+        5_000,
         `Timed out while searching ${providerKey}.`
       );
       const match = selectBestMatch(search.results || [], title);
 
       if (!match) {
-        continue;
+        return null;
       }
 
       const info = await withTimeout(
         provider.fetchAnimeInfo(match.id),
-        episodeInfoTimeoutMs,
+        5_000,
         `Timed out while fetching ${providerKey} title info.`
       );
       const episodes = Array.isArray(info.episodes) ? info.episodes : [];
@@ -716,15 +717,31 @@ async function findProviderEpisodes(title, excludedProviderKeys = []) {
           episodes: episodes.map(episode => normalizeEpisode(episode, providerKey))
         };
       }
+
+      return null;
     } catch (error) {
       log('warn', 'Provider episode lookup failed.', {
         providerKey,
         title,
         message: error.message
       });
+      return null;
+    }
+  });
+
+  const results = await Promise.allSettled(providerAttempts);
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value?.episodes?.length > 0) {
+      log('info', 'Parallel provider episode lookup succeeded.', {
+        providerKey: result.value.providerKey,
+        episodeCount: result.value.episodes.length,
+        title
+      });
+      return result.value;
     }
   }
 
+  log('warn', 'All parallel provider episode lookups failed or returned empty.', { title });
   return { providerKey: defaultProviderKey, episodes: [] };
 }
 
@@ -761,7 +778,7 @@ function normalizeCatalogTitle(item) {
   return {
     id: String(item.id || ''),
     malId: item.malId,
-    title: item.title || '',
+    title: titleToString(item.title) || '',
     image: item.image || item.cover || '',
     cover: item.cover || item.image || '',
     description: item.description || '',
