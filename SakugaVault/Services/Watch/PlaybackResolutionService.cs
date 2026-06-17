@@ -310,8 +310,14 @@ public sealed class PlaybackResolutionService(
             return false;
         }
 
-        return !string.Equals(result.PreferredProtocol, "HLS", StringComparison.OrdinalIgnoreCase) &&
-               !result.StreamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+        var isHls = string.Equals(result.PreferredProtocol, "HLS", StringComparison.OrdinalIgnoreCase) ||
+                    result.StreamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+
+        // Non-HLS media is proxied for stable byte ranges. HLS is normally played
+        // directly, but when the upstream requires injected headers (e.g. a Referer
+        // gate on the playlist, key, and segments) the browser cannot supply them,
+        // so the playlist must be proxied and rewritten too.
+        return !isHls || result.SourceRequestHeaders.Count > 0;
     }
 
     private IReadOnlyList<string> BuildProviderSequence(string? metadataProvider, string? providerOverride)
