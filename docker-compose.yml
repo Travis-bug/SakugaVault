@@ -82,6 +82,33 @@ services:
       - "3300"
     restart: unless-stopped
 
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    environment:
+      LOG_LEVEL: ${FLARESOLVERR_LOG_LEVEL:-info}
+      TZ: ${TZ:-UTC}
+    # Internal-only: only the animepahe resolver reaches it on the Docker network.
+    expose:
+      - "8191"
+    restart: unless-stopped
+
+  animepahe:
+    build:
+      context: ./animepahe-resolver
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3400
+      FLARESOLVERR_URL: http://flaresolverr:8191
+      ANIMEPAHE_BASES: ${ANIMEPAHE_BASES:-https://animepahe.com,https://animepahe.org}
+      PROVIDER_NAME: ${ANIMEPAHE_PROVIDER_NAME:-animepahe}
+    depends_on:
+      flaresolverr:
+        condition: service_started
+    # Internal-only: no host port mapping, so the browser cannot reach it.
+    expose:
+      - "3400"
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -97,8 +124,12 @@ services:
         condition: service_started
       scrapy:
         condition: service_started
+      animepahe:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development
+      # FlareSolverr's first Cloudflare solve is slow; give the fan-out room.
+      Scrapers__RequestTimeoutSeconds: ${SCRAPER_REQUEST_TIMEOUT_SECONDS:-75}
       ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
       Redis__ConnectionString: redis:6379
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}
@@ -116,6 +147,11 @@ services:
       Scrapers__PlaybackResolvers__2__BaseUrl: http://scrapy:3300
       Scrapers__PlaybackResolvers__2__Enabled: ${SCRAPY_RESOLVER_ENABLED:-false}
       Scrapers__PlaybackResolvers__2__Priority: "30"
+      Scrapers__PlaybackResolvers__3__Name: animepahe-flaresolverr
+      Scrapers__PlaybackResolvers__3__BaseUrl: http://animepahe:3400
+      Scrapers__PlaybackResolvers__3__Enabled: ${ANIMEPAHE_RESOLVER_ENABLED:-true}
+      Scrapers__PlaybackResolvers__3__Priority: "5"
+      Scrapers__PlaybackResolvers__3__RequestTimeoutSeconds: "75"
     ports:
       - "8080:8080"
 
