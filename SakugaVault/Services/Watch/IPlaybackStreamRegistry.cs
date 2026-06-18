@@ -11,4 +11,5 @@ public sealed record ProxiedPlaybackStream(
     Dictionary<string, string> Headers,
     Guid OwnerUserId,
     string PlaybackSessionId,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    bool IsHls = false);

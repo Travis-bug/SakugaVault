@@ -24,9 +24,25 @@ public sealed class WatchHistoryService(
         CancellationToken cancellationToken)
     {
         var normalizedPageSize = Math.Clamp(pageSize, 1, 100);
-        var query = dbContext.WatchHistoryEntries
+
+        // Continue-watching is per anime, not per episode: collapse to the most
+        // recently watched episode of each title. An entry is the latest for its
+        // anime when no sibling entry (same user + anime) is more recent.
+        var latestPerAnime = dbContext.WatchHistoryEntries
             .AsNoTracking()
-            .Where(entry => entry.UserId == userId);
+            .Where(entry => entry.UserId == userId)
+            .Where(entry => !dbContext.WatchHistoryEntries.Any(other =>
+                other.UserId == userId &&
+                other.AnimeId == entry.AnimeId &&
+                (other.LastWatchedAtUtc > entry.LastWatchedAtUtc ||
+                    (other.LastWatchedAtUtc == entry.LastWatchedAtUtc && other.Id.CompareTo(entry.Id) > 0))));
+
+        // A finished series leaves continue-watching: its latest episode is
+        // completed and is the last episode the title has.
+        var query = latestPerAnime.Where(entry => !(
+            entry.Completed &&
+            entry.Anime.EpisodeCount > 0 &&
+            entry.EpisodeNumber >= entry.Anime.EpisodeCount));
 
         if (TryDecodeCursor(cursor, out var lastWatchedAtUtc, out var entryId))
         {
