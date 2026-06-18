@@ -56,6 +56,9 @@ class ServiceConfig:
     request_user_agent: str
     cache_ttl_seconds: int
     warm_on_start: bool
+    # Background keep-alive interval so Cloudflare clearance never goes stale on
+    # the user path.
+    heartbeat_interval_seconds: int
 
 
 def load_config() -> ServiceConfig:
@@ -76,6 +79,7 @@ def load_config() -> ServiceConfig:
         ),
         cache_ttl_seconds=_int("CACHE_TTL_SECONDS", 600),
         warm_on_start=_bool("WARM_ON_START", True),
+        heartbeat_interval_seconds=_int("HEARTBEAT_INTERVAL_SECONDS", 180),
     )
 
 

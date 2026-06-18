@@ -184,12 +184,32 @@ def watch(provider: str | None = None):
     return jsonify(payload)
 
 
+# FlareSolverr's own container (headless Chrome) takes a few seconds to come up,
+# so the first warm attempts can race it. Retry with backoff until the session
+# solves, then hand off to the heartbeat that keeps clearance fresh.
+_PING_URL = CONFIG.animepahe_bases[0] + "/api?m=airing&page=1"
+
+
 def _warm_in_background() -> None:
-    try:
-        FLARESOLVERR.warm()
-        print("AnimePahe resolver: FlareSolverr session warmed.", flush=True)
-    except FlareSolverrError as error:
-        print(f"AnimePahe resolver: warm-up deferred ({error}).", flush=True)
+    delay = 5
+    while True:
+        try:
+            FLARESOLVERR.warm()
+            print("AnimePahe resolver: FlareSolverr session warmed.", flush=True)
+            break
+        except FlareSolverrError as error:
+            print(
+                f"AnimePahe resolver: warm-up not ready, retrying in {delay}s ({error}).",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 60)
+
+    FLARESOLVERR.start_keepalive(CONFIG.heartbeat_interval_seconds, _PING_URL)
+    print(
+        f"AnimePahe resolver: keepalive heartbeat every {CONFIG.heartbeat_interval_seconds}s.",
+        flush=True,
+    )
 
 
 def main() -> None:

@@ -15,6 +15,7 @@ import html
 import json
 import re
 import threading
+import time
 
 import requests
 
@@ -82,6 +83,27 @@ class FlareSolverr:
             except FlareSolverrError:
                 self._reset_session()
                 raise
+
+    def start_keepalive(self, interval_seconds: int, ping_url: str) -> None:
+        """Periodically touch the target so Cloudflare clearance stays fresh.
+
+        Without this, clearance expires during idle gaps and the next user
+        request pays the full challenge solve (10-30s, occasionally a timeout).
+        The heartbeat moves that cost off the user path; get() already
+        re-solves on a stale session, so a failed ping just self-heals.
+        """
+        if interval_seconds <= 0:
+            return
+
+        def loop() -> None:
+            while True:
+                time.sleep(interval_seconds)
+                try:
+                    self.get(ping_url)
+                except FlareSolverrError:
+                    pass  # get() already dropped the session; next call re-solves.
+
+        threading.Thread(target=loop, daemon=True, name="flaresolverr-keepalive").start()
 
     def get(self, url: str) -> str:
         """Fetches a URL through the cleared browser session; returns response body."""
