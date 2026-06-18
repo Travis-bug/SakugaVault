@@ -10,6 +10,9 @@ docker-compose.yml
 **/*.md
 .DS_Store
 .env
-sakugavault-web/node_modules/
 sakugavault-web/dist/
-node_modules/
+# Recursive so nested service node_modules (e.g. crawlee-scrapingbee-service/)
+# are excluded from the root `context: .` builds (api, scraper); a bare
+# `node_modules/` only matches the repo root and shipped 60MB+ over slow
+# Docker Desktop file-sharing.
+**/node_modules/
