@@ -1024,6 +1024,10 @@ p {
 
 .comments-grid {
   grid-template-columns: minmax(18rem, 22rem) minmax(0, 1fr);
+  /* Without this, both columns stretch to the tallest one: as the feed grows
+     with each posted comment, the form column stretches with it and the
+     textarea/button distort. Pin each column to its own content height. */
+  align-items: start;
 }
 
 .comment-form,
@@ -1046,6 +1050,9 @@ p {
 .comment-feed {
   display: grid;
   gap: 0.85rem;
+  align-content: start;
+  max-height: 40rem;
+  overflow-y: auto;
 }
 
 .comment-card {
