@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { AppChrome } from "../components/AppChrome";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingPanel } from "../components/LoadingPanel";
@@ -217,8 +217,25 @@ async function playWhenAllowed(video: HTMLVideoElement) {
   }
 }
 
-function getInitialSelection(payload: WatchPageDto) {
+function getInitialSelection(payload: WatchPageDto, preferredEpisodeNumber: number | null) {
   const firstSeasonWithEpisodes = payload.seasons.find((season) => season.episodes.length > 0) ?? payload.seasons[0] ?? null;
+
+  // Resume the episode carried in the URL (set on every selection) so a reload
+  // or shared link lands on the same episode instead of snapping back to ep 1.
+  if (preferredEpisodeNumber !== null) {
+    const seasonWithEpisode = payload.seasons.find((season) =>
+      season.episodes.some((episode) => episode.episodeNumber === preferredEpisodeNumber));
+    if (seasonWithEpisode) {
+      return { seasonId: seasonWithEpisode.id, episodeNumber: preferredEpisodeNumber };
+    }
+
+    // Provider episode lists load after the page, so the season may not be known
+    // yet; trust the episode if it falls within the title's known range.
+    if (preferredEpisodeNumber >= 1 && preferredEpisodeNumber <= payload.episodeCount) {
+      return { seasonId: firstSeasonWithEpisodes?.id ?? null, episodeNumber: preferredEpisodeNumber };
+    }
+  }
+
   const firstEpisode = firstSeasonWithEpisodes?.episodes[0] ?? null;
 
   return {
@@ -227,11 +244,21 @@ function getInitialSelection(payload: WatchPageDto) {
   };
 }
 
+function readEpisodeParam(params: URLSearchParams): number | null {
+  const raw = Number(params.get("ep"));
+  return Number.isInteger(raw) && raw > 0 ? raw : null;
+}
+
 export function WatchPage() {
   const { animeId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { apiRequest, apiKeepalive, user } = useAuth();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastSavedSecondRef = useRef(0);
+  // Mirrors so the page-load and episode-list effects can read the current URL
+  // episode / selection without re-running when those values change.
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
   const [watchPage, setWatchPage] = useState<WatchPageDto | null>(null);
   const [comments, setComments] = useState<CommentDto[]>([]);
   const [resolvedPlayback, setResolvedPlayback] = useState<ResolvedPlaybackDto | null>(null);
@@ -252,6 +279,26 @@ export function WatchPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const selectedEpisodeRef = useRef(selectedEpisodeNumber);
+  selectedEpisodeRef.current = selectedEpisodeNumber;
+
+  // Keep ?ep=N in the URL in sync with the active episode so a reload or shared
+  // link resumes it. Replace (not push) so the back button leaves the page
+  // instead of stepping through every episode the viewer clicked.
+  useEffect(() => {
+    if (selectedEpisodeNumber === null) {
+      return;
+    }
+
+    if (searchParams.get("ep") === String(selectedEpisodeNumber)) {
+      return;
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.set("ep", String(selectedEpisodeNumber));
+    setSearchParams(next, { replace: true });
+  }, [searchParams, selectedEpisodeNumber, setSearchParams]);
+
   useEffect(() => {
     const controller = new AbortController();
 
@@ -271,7 +318,7 @@ export function WatchPage() {
           signal: controller.signal
         });
 
-        const selection = getInitialSelection(payload);
+        const selection = getInitialSelection(payload, readEpisodeParam(searchParamsRef.current));
         setWatchPage(payload);
         setComments(payload.comments);
         setSelectedSeasonId(selection.seasonId);
@@ -319,10 +366,22 @@ export function WatchPage() {
         if (response.isResolved && response.seasons.length > 0) {
           setProviderSeasons(response.seasons);
           setEpisodeListStatus("resolved");
-          setSelectedSeasonId((current) =>
-            response.seasons.some((season) => season.id === current)
+          setSelectedSeasonId((current) => {
+            // Prefer the season that actually holds the active episode (the one
+            // restored from ?ep=) so the right season tab is highlighted.
+            const activeEpisode = selectedEpisodeRef.current;
+            const seasonWithEpisode = activeEpisode === null
+              ? undefined
+              : response.seasons.find((season) =>
+                  season.episodes.some((episode) => episode.episodeNumber === activeEpisode));
+            if (seasonWithEpisode) {
+              return seasonWithEpisode.id;
+            }
+
+            return response.seasons.some((season) => season.id === current)
               ? current
-              : response.seasons[0]?.id ?? null);
+              : response.seasons[0]?.id ?? null;
+          });
 
           return;
         }
@@ -517,6 +576,32 @@ export function WatchPage() {
       }
 
       hlsInstance = new Hls();
+
+      // A large seek into an un-buffered region surfaces as a fatal hls.js
+      // error; without handling it the player just stalls (and the surrounding
+      // remount logic dropped the viewer back to episode 1). Recover in place:
+      // re-arm the loader for network errors, recover the decoder for media
+      // errors, and only surface a message if neither is recoverable.
+      hlsInstance.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal || !hlsInstance) {
+          return;
+        }
+
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            hlsInstance.startLoad();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            hlsInstance.recoverMediaError();
+            break;
+          default:
+            hlsInstance.destroy();
+            hlsInstance = null;
+            setStatusMessage("Playback stopped unexpectedly. Reload the episode to continue.");
+            break;
+        }
+      });
+
       hlsInstance.loadSource(activeStreamUrl);
       hlsInstance.attachMedia(videoRef.current);
       hlsInstance.on(Hls.Events.MANIFEST_PARSED, async () => {
