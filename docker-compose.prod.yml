@@ -1,0 +1,215 @@
+# Production stack. Run with:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Differences from the dev docker-compose.yml:
+#   - Caddy is the only thing bound to the host (80/443); it terminates TLS and
+#     forwards to web, which serves the SPA and proxies /api -> api internally.
+#   - Nothing else publishes a host port: MySQL, Redis, the API and every
+#     scraper stay on the internal Docker network only (smaller attack surface).
+#   - api runs ASPNETCORE_ENVIRONMENT=Production and trusts the proxy headers.
+#   - a db-backup sidecar takes scheduled mysqldumps to ./backups.
+#
+# Secrets come from .env.prod on the server (never commit it). See
+# .env.prod.example for the full list of variables.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      web:
+        condition: service_started
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    # Internal only — no host port. Reach it from the host with
+    # `docker compose -f docker-compose.prod.yml exec mysql mysql ...` if needed.
+    expose:
+      - "3306"
+    volumes:
+      - sakugavault-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  db-backup:
+    image: mysql:8
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      OFFSITE_UPLOAD_CMD: ${OFFSITE_UPLOAD_CMD:-}
+    volumes:
+      - ./ops/db-backup.sh:/usr/local/bin/db-backup.sh:ro
+      - ./backups:/backups
+    entrypoint: ["sh", "/usr/local/bin/db-backup.sh"]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    volumes:
+      - sakugavault-redis-data:/data
+    restart: unless-stopped
+
+  scraper:
+    build:
+      context: .
+      dockerfile: scraper-service/Dockerfile
+    environment:
+      PORT: 3100
+      DEFAULT_ANIME_PROVIDER: ${DEFAULT_ANIME_PROVIDER:-animekai}
+      PROVIDER_SEARCH_ORDER: ${PROVIDER_SEARCH_ORDER:-animekai,hianime,animepahe,kickassanime,animeunity,animesaturn,animesama}
+      ALLOW_REGIONAL_LANGUAGE_FALLBACKS: ${ALLOW_REGIONAL_LANGUAGE_FALLBACKS:-false}
+    expose:
+      - "3100"
+    restart: unless-stopped
+
+  crawlee:
+    build:
+      context: ./crawlee-scrapingbee-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3200
+      SCRAPINGBEE_API_KEY: ${SCRAPINGBEE_API_KEY}
+      TARGET_PROVIDER_NAME: ${CRAWLEE_PROVIDER_NAME:-crawlee_scrapingbee}
+      TARGET_BASE_URL: ${CRAWLEE_TARGET_BASE_URL}
+      SCRAPINGBEE_RENDER_JS: ${SCRAPINGBEE_RENDER_JS:-true}
+      SCRAPINGBEE_PREMIUM_PROXY: ${SCRAPINGBEE_PREMIUM_PROXY:-true}
+    expose:
+      - "3200"
+    restart: unless-stopped
+
+  scrapy:
+    build:
+      context: ./scrapy-scraperapi-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3300
+      SCRAPERAPI_API_KEY: ${SCRAPERAPI_API_KEY}
+      TARGET_PROVIDER_NAME: ${SCRAPY_PROVIDER_NAME:-scrapy_scraperapi}
+      TARGET_BASE_URL: ${SCRAPY_TARGET_BASE_URL}
+      SCRAPERAPI_RENDER: ${SCRAPERAPI_RENDER:-true}
+      SCRAPERAPI_ULTRA_PREMIUM: ${SCRAPERAPI_ULTRA_PREMIUM:-true}
+    expose:
+      - "3300"
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    environment:
+      LOG_LEVEL: ${FLARESOLVERR_LOG_LEVEL:-info}
+      TZ: ${TZ:-UTC}
+    expose:
+      - "8191"
+    restart: unless-stopped
+
+  animepahe:
+    build:
+      context: ./animepahe-resolver
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3400
+      FLARESOLVERR_URL: http://flaresolverr:8191
+      ANIMEPAHE_BASES: ${ANIMEPAHE_BASES:-https://animepahe.com,https://animepahe.org}
+      PROVIDER_NAME: ${ANIMEPAHE_PROVIDER_NAME:-animepahe}
+    depends_on:
+      flaresolverr:
+        condition: service_started
+    expose:
+      - "3400"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: SakugaVault/Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      scraper:
+        condition: service_started
+      crawlee:
+        condition: service_started
+      scrapy:
+        condition: service_started
+      animepahe:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Behind Caddy+nginx, honor X-Forwarded-* so redirects/cookies use https.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      Scrapers__RequestTimeoutSeconds: ${SCRAPER_REQUEST_TIMEOUT_SECONDS:-75}
+      ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
+      Redis__ConnectionString: redis:6379
+      ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}
+      # Same-origin in prod (Caddy serves SPA + /api on one domain), so the only
+      # allowed origin is the public site.
+      Frontend__AllowedOrigins__0: https://${DOMAIN}
+      Scrapers__ConsumetBaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
+      Scrapers__PlaybackResolvers__0__Name: consumet-local
+      Scrapers__PlaybackResolvers__0__BaseUrl: ${SCRAPER_BASE_URL:-http://scraper:3100}
+      Scrapers__PlaybackResolvers__0__Enabled: "true"
+      Scrapers__PlaybackResolvers__0__Priority: "10"
+      Scrapers__PlaybackResolvers__1__Name: crawlee-scrapingbee
+      Scrapers__PlaybackResolvers__1__BaseUrl: http://crawlee:3200
+      Scrapers__PlaybackResolvers__1__Enabled: ${CRAWLEE_RESOLVER_ENABLED:-false}
+      Scrapers__PlaybackResolvers__1__Priority: "20"
+      Scrapers__PlaybackResolvers__2__Name: scrapy-scraperapi
+      Scrapers__PlaybackResolvers__2__BaseUrl: http://scrapy:3300
+      Scrapers__PlaybackResolvers__2__Enabled: ${SCRAPY_RESOLVER_ENABLED:-false}
+      Scrapers__PlaybackResolvers__2__Priority: "30"
+      Scrapers__PlaybackResolvers__3__Name: animepahe-flaresolverr
+      Scrapers__PlaybackResolvers__3__BaseUrl: http://animepahe:3400
+      Scrapers__PlaybackResolvers__3__Enabled: ${ANIMEPAHE_RESOLVER_ENABLED:-true}
+      Scrapers__PlaybackResolvers__3__Priority: "5"
+      Scrapers__PlaybackResolvers__3__RequestTimeoutSeconds: "75"
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./sakugavault-web
+      dockerfile: Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    expose:
+      - "80"
+    restart: unless-stopped
+
+volumes:
+  sakugavault-mysql-data:
+  sakugavault-redis-data:
+  caddy-data:
+  caddy-config:

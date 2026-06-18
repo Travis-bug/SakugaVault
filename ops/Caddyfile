@@ -1,0 +1,15 @@
+# Production edge: terminates TLS and forwards to the web container, which
+# already serves the SPA and proxies /api -> api:8080 (including the Range-aware
+# stream proxy). Keeping that routing in nginx means Caddy only handles TLS +
+# HTTP/2/3, and we don't re-implement the streaming proxy here.
+#
+# Auto-HTTPS: Caddy provisions and renews a Let's Encrypt cert for $DOMAIN as
+# long as DNS points at this host and ports 80/443 are reachable.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:80
+}

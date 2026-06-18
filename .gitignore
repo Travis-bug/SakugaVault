@@ -36,7 +36,11 @@ sakugavault-web/vite.config.d.ts
 .env
 .env.*
 !.envrc
+!.env.prod.example
 /secrets/
+
+# Local DB dumps from the db-backup sidecar — never commit data.
+/backups/
 **/secrets/
 *.secrets.json
 appsettings.Local.json
