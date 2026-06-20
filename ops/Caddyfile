@@ -3,13 +3,18 @@
 # stream proxy). Keeping that routing in nginx means Caddy only handles TLS +
 # HTTP/2/3, and we don't re-implement the streaming proxy here.
 #
-# Auto-HTTPS: Caddy provisions and renews a Let's Encrypt cert for $DOMAIN as
-# long as DNS points at this host and ports 80/443 are reachable.
+# TLS via Cloudflare DNS-01 challenge: works even with Cloudflare's proxy
+# (orange cloud) turned on, because validation happens over a DNS TXT record
+# (written with CLOUDFLARE_API_TOKEN) instead of HTTP. Certs auto-renew.
+# Pair this with Cloudflare SSL/TLS mode "Full (strict)" for end-to-end HTTPS.
 {
 	email {$ACME_EMAIL}
 }
 
 {$DOMAIN} {
 	encode zstd gzip
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
 	reverse_proxy web:80
 }

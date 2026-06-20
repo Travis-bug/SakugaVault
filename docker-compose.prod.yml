@@ -14,13 +14,18 @@
 
 services:
   caddy:
-    image: caddy:2-alpine
+    # Custom image: stock Caddy + the Cloudflare DNS plugin (see ops/caddy).
+    build:
+      context: ./ops/caddy
+      dockerfile: Dockerfile
     depends_on:
       web:
         condition: service_started
     environment:
       DOMAIN: ${DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
+      # Scoped Cloudflare token (Zone:DNS:Edit for this domain) for DNS-01 TLS.
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
     ports:
       - "80:80"
       - "443:443"
