@@ -30,13 +30,18 @@ echo "Resolving availability domain, network, and image..."
 AD=$(oci iam availability-domain list --compartment-id "$COMPARTMENT_ID" \
 		--query 'data[0].name' --raw-output)
 
-VCN_ID=$(oci network vcn list --compartment-id "$COMPARTMENT_ID" --display-name "$VCN_NAME" \
-		--query 'data[0].id' --raw-output)
-[ -n "$VCN_ID" ] && [ "$VCN_ID" != "null" ] || { echo "VCN '$VCN_NAME' not found."; exit 1; }
-
-SUBNET_ID=$(oci network subnet list --compartment-id "$COMPARTMENT_ID" --vcn-id "$VCN_ID" \
-		--query "data[?contains(\"display-name\", 'Public')].id | [0]" --raw-output)
-[ -n "$SUBNET_ID" ] && [ "$SUBNET_ID" != "null" ] || { echo "Public subnet in '$VCN_NAME' not found."; exit 1; }
+# A public subnet is one that allows public IPs (prohibit-public-ip-on-vnic = false).
+# Search the whole compartment so naming/extra empty VCNs don't matter.
+SUBNET_ID=$(oci network subnet list --compartment-id "$COMPARTMENT_ID" --all \
+		--query "data[?\"prohibit-public-ip-on-vnic\"==\`false\`].id | [0]" --raw-output)
+if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "null" ]; then
+	echo "No public subnet found. Existing subnets:"
+	oci network subnet list --compartment-id "$COMPARTMENT_ID" --all \
+		--query 'data[].{name:"display-name", prohibit_public_ip:"prohibit-public-ip-on-vnic"}' --output table
+	echo "If none show prohibit_public_ip=false, create a VCN with the"
+	echo "'Create VCN with Internet Connectivity' wizard, then re-run."
+	exit 1
+fi
 
 IMAGE_ID=$(oci compute image list --compartment-id "$COMPARTMENT_ID" \
 		--operating-system "Canonical Ubuntu" --operating-system-version "24.04" \
