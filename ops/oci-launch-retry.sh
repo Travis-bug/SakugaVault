@@ -91,11 +91,13 @@ while true; do
 	fi
 
 	err=$(cat /tmp/oci_launch_err)
-	if echo "$err" | grep -qiE "Out of (host )?capacity|InternalError|500|too busy"; then
-		echo "no capacity, sleeping ${SLEEP_SECONDS}s"
+	# Retry on capacity shortages AND transient network/throttling errors; only
+	# stop on a genuinely fatal error (auth, quota/limit, bad parameter).
+	if echo "$err" | grep -qiE "Out of (host )?capacity|InternalError|500|503|too busy|timed out|timeout|connection|RequestException|Max retries|TooManyRequests|429|ServiceUnavailable"; then
+		echo "transient/no-capacity, sleeping ${SLEEP_SECONDS}s"
 		sleep "$SLEEP_SECONDS"
 	else
-		echo "STOPPED — non-capacity error:"
+		echo "STOPPED — fatal error (not capacity/network):"
 		echo "$err"
 		exit 1
 	fi
