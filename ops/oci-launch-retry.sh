@@ -91,9 +91,16 @@ while true; do
 	fi
 
 	err=$(cat /tmp/oci_launch_err)
+	# An empty/whitespace-only error means the CLI crashed without a message
+	# (transient) — treat it as retryable rather than fatal.
+	if [ -z "$(printf '%s' "$err" | tr -d '[:space:]')" ]; then
+		echo "empty error (CLI blip), sleeping ${SLEEP_SECONDS}s"
+		sleep "$SLEEP_SECONDS"
+		continue
+	fi
 	# Retry on capacity shortages AND transient network/throttling errors; only
 	# stop on a genuinely fatal error (auth, quota/limit, bad parameter).
-	if echo "$err" | grep -qiE "Out of (host )?capacity|InternalError|500|503|too busy|timed out|timeout|connection|RequestException|Max retries|TooManyRequests|429|ServiceUnavailable"; then
+	if echo "$err" | grep -qiE "Out of (host )?capacity|InternalError|500|503|too busy|timed out|timeout|connection|RequestException|Max retries|TooManyRequests|429|ServiceUnavailable|allowed clock skew|clock skew"; then
 		echo "transient/no-capacity, sleeping ${SLEEP_SECONDS}s"
 		sleep "$SLEEP_SECONDS"
 	else

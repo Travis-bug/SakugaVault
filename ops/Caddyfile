@@ -18,3 +18,12 @@
 	}
 	reverse_proxy web:80
 }
+
+# Serve a cert for www too (so Cloudflare's Full-strict handshake succeeds when
+# it connects with SNI www.<domain>), and redirect it to the apex.
+www.{$DOMAIN} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	redir https://{$DOMAIN}{uri} permanent
+}
