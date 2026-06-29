@@ -90,17 +90,24 @@ app.Use(async (context, next) =>
     await next();
 });
 
-if (app.Environment.IsDevelopment())
 {
     await using var scope = app.Services.CreateAsyncScope();
     var dbContext = scope.ServiceProvider.GetRequiredService<SakugaVaultDbContext>();
+
+    // Apply EF migrations on every startup (dev AND prod) so a fresh database
+    // gets its schema created automatically. Previously this was gated to
+    // Development, which left production with no tables.
     await dbContext.Database.MigrateAsync(app.Lifetime.ApplicationStopping);
 
-    var catalogOptions = scope.ServiceProvider.GetRequiredService<IOptions<CatalogOptions>>().Value;
-    if (catalogOptions.EnableDevelopmentSeedData)
+    // Sample catalog seed data is for local development only.
+    if (app.Environment.IsDevelopment())
     {
-        var seeder = scope.ServiceProvider.GetRequiredService<SakugaVaultSeeder>();
-        await seeder.SeedAsync(app.Lifetime.ApplicationStopping);
+        var catalogOptions = scope.ServiceProvider.GetRequiredService<IOptions<CatalogOptions>>().Value;
+        if (catalogOptions.EnableDevelopmentSeedData)
+        {
+            var seeder = scope.ServiceProvider.GetRequiredService<SakugaVaultSeeder>();
+            await seeder.SeedAsync(app.Lifetime.ApplicationStopping);
+        }
     }
 }
 
