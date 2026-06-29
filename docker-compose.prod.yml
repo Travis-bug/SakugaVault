@@ -174,6 +174,17 @@ services:
       # Behind Caddy+nginx, honor X-Forwarded-* so redirects/cookies use https.
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
       Scrapers__RequestTimeoutSeconds: ${SCRAPER_REQUEST_TIMEOUT_SECONDS:-75}
+      # Live-scrape ceiling: dev default (5 per 600s) starves distinct-title
+      # resolves on a cold cache. 60/60s is well within FlareSolverr's ~0.6s
+      # resolve cost and stops launch-day 429s. Same-title herds already coalesce.
+      Scrapers__RateLimit__PermitLimit: ${SCRAPER_RATELIMIT_PERMIT:-60}
+      Scrapers__RateLimit__WindowSeconds: ${SCRAPER_RATELIMIT_WINDOW:-60}
+      # Resolved kwik URLs are content-addressed (CDN-cached ~1yr), so a long
+      # cache TTL is safe and keeps popular titles warm, cutting re-scrapes.
+      Scrapers__StreamCacheTtlMinutes: ${STREAM_CACHE_TTL_MINUTES:-60}
+      # The kwik AES-key endpoint 403s .NET's TLS fingerprint; the stream proxy
+      # retries those 403s through the resolver's /fetch (Python requests passes).
+      Scrapers__StreamFetchFallbackUrl: ${STREAM_FETCH_FALLBACK_URL:-http://animepahe:3400}
       ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
       Redis__ConnectionString: redis:6379
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}

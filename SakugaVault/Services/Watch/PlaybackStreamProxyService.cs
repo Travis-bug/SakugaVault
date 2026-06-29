@@ -1,5 +1,7 @@
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Net.Http.Headers;
 using SakugaVault.Extensions;
 using SakugaVault.Services.Scraping;
@@ -19,11 +21,16 @@ public sealed partial class PlaybackStreamProxyService(
     IHttpContextAccessor httpContextAccessor,
     IHttpClientFactory httpClientFactory,
     TimeProvider timeProvider,
+    IConfiguration configuration,
     ILogger<PlaybackStreamProxyService> logger) : IPlaybackStreamProxyService
 {
     private static readonly TimeSpan StreamLifetime = TimeSpan.FromMinutes(30);
     private const long InitialRangeEnd = 1_048_575;
     private const string HlsContentType = "application/vnd.apple.mpegurl";
+
+    // Resolver base URL used to retry kwik fetches the .NET TLS fingerprint is
+    // blocked from (the AES-key endpoint 403s .NET but accepts Python requests).
+    private readonly string? fetchFallbackBase = configuration["Scrapers:StreamFetchFallbackUrl"];
 
     public string Register(StreamScrapeResult stream)
     {
@@ -120,37 +127,96 @@ public sealed partial class PlaybackStreamProxyService(
             upstreamRequest.Headers.TryAddWithoutValidation(HeaderNames.Range, $"bytes=0-{InitialRangeEnd}");
         }
 
+        // The kwik CDN origin 403s any segment/key fetch without a browser User-Agent.
+        // Force one onto every upstream request, overriding whatever the resolver or a
+        // stale cached resolution supplied, so this can never regress.
+        upstreamRequest.Headers.Remove("User-Agent");
+        upstreamRequest.Headers.TryAddWithoutValidation(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+
+        // The kwik key endpoint also rejects requests that omit the Accept /
+        // Accept-Language headers a real browser always sends (.NET HttpClient
+        // sends neither by default), so a bare UA+Referer GET 403s on a cache
+        // miss while a browser-shaped request succeeds. Add them if absent.
+        if (!upstreamRequest.Headers.Contains("Accept"))
+        {
+            upstreamRequest.Headers.TryAddWithoutValidation("Accept", "*/*");
+        }
+        if (!upstreamRequest.Headers.Contains("Accept-Language"))
+        {
+            upstreamRequest.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+        }
+
         var client = httpClientFactory.CreateClient("stream-proxy-client");
-        using var upstreamResponse = await client.SendAsync(
+        var upstreamResponse = await client.SendAsync(
             upstreamRequest,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
-
-        if (!upstreamResponse.IsSuccessStatusCode)
+        try
         {
-            logger.LogWarning(
-                "Playback stream proxy request {StreamId} failed with upstream status code {StatusCode}",
-                streamId,
-                (int)upstreamResponse.StatusCode);
-        }
+            // The kwik AES-key endpoint blocks .NET HttpClient's TLS fingerprint
+            // (403) even for cached objects, while it accepts the resolver's
+            // Python `requests` client. Retry the 403 through the resolver's
+            // /fetch proxy so the key (and any similarly gated resource) plays.
+            if (upstreamResponse.StatusCode == HttpStatusCode.Forbidden && !string.IsNullOrWhiteSpace(fetchFallbackBase))
+            {
+                var fallbackUrl = $"{fetchFallbackBase.TrimEnd('/')}/fetch?url={Uri.EscapeDataString(target)}";
+                using var fallbackRequest = new HttpRequestMessage(HttpMethod.Get, fallbackUrl);
+                if (request.Headers.Range.Count > 0)
+                {
+                    fallbackRequest.Headers.TryAddWithoutValidation(HeaderNames.Range, request.Headers.Range.ToString());
+                }
 
-        if (stream.IsHls && IsPlaylist(upstreamResponse, target))
-        {
-            await WriteRewrittenPlaylistAsync(streamId, target, upstreamResponse, response, cancellationToken);
+                var fallbackResponse = await client.SendAsync(
+                    fallbackRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+                logger.LogInformation(
+                    "Stream proxy 403 for {Target} retried via resolver fetch -> {Status}",
+                    target,
+                    (int)fallbackResponse.StatusCode);
+                upstreamResponse.Dispose();
+                upstreamResponse = fallbackResponse;
+            }
+
+            if (!upstreamResponse.IsSuccessStatusCode)
+            {
+                logger.LogWarning(
+                    "Playback stream proxy request {StreamId} failed with upstream status code {StatusCode} for {Target}",
+                    streamId,
+                    (int)upstreamResponse.StatusCode,
+                    target);
+            }
+
+            if (stream.IsHls && IsPlaylist(upstreamResponse, target))
+            {
+                await WriteRewrittenPlaylistAsync(streamId, target, upstreamResponse, response, cancellationToken);
+                return true;
+            }
+
+            response.StatusCode = (int)upstreamResponse.StatusCode;
+            CopyContentHeader(upstreamResponse, response, HeaderNames.ContentType);
+            CopyContentHeader(upstreamResponse, response, HeaderNames.ContentLength);
+            CopyContentHeader(upstreamResponse, response, HeaderNames.ContentRange);
+            CopyContentHeader(upstreamResponse, response, HeaderNames.LastModified);
+            CopyContentHeader(upstreamResponse, response, HeaderNames.ETag);
+            response.Headers.AcceptRanges = "bytes";
+            // Only cache successful media. A transient upstream error (e.g. a 403 from a
+            // cache-miss segment) must NOT be cached by the browser, or it sticks for the
+            // whole window and replays even after the origin recovers.
+            response.Headers.CacheControl = upstreamResponse.IsSuccessStatusCode
+                ? "private, max-age=300"
+                : "no-store";
+
+            await upstreamResponse.Content.CopyToAsync(response.Body, cancellationToken);
             return true;
         }
-
-        response.StatusCode = (int)upstreamResponse.StatusCode;
-        CopyContentHeader(upstreamResponse, response, HeaderNames.ContentType);
-        CopyContentHeader(upstreamResponse, response, HeaderNames.ContentLength);
-        CopyContentHeader(upstreamResponse, response, HeaderNames.ContentRange);
-        CopyContentHeader(upstreamResponse, response, HeaderNames.LastModified);
-        CopyContentHeader(upstreamResponse, response, HeaderNames.ETag);
-        response.Headers.AcceptRanges = "bytes";
-        response.Headers.CacheControl = "private, max-age=300";
-
-        await upstreamResponse.Content.CopyToAsync(response.Body, cancellationToken);
-        return true;
+        finally
+        {
+            upstreamResponse.Dispose();
+        }
     }
 
     private async Task WriteRewrittenPlaylistAsync(

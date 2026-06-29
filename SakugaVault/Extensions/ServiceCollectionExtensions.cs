@@ -424,6 +424,14 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("stream-proxy-client", client =>
         {
             client.Timeout = TimeSpan.FromMinutes(10);
+            // The kwik CDN origin rejects (403) cache-miss segment/key fetches
+            // that lack a browser User-Agent. Resolver-supplied headers (Referer,
+            // and now UA) are applied per-request, but set a browser UA as the
+            // client default so every proxied fetch carries one even if a cached
+            // resolution predates the resolver's UA header.
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
         });
 
         services.AddTransient<LoggingDelegatingHandler>();
