@@ -13,11 +13,13 @@ internal Docker network.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Any, Callable
 
-from flask import Flask, jsonify, request
+import requests
+from flask import Flask, Response, jsonify, request
 
 from app import animepahe
 from app.config import CONFIG
@@ -49,6 +51,41 @@ def _cached(key: str, factory: Callable[[], Any]) -> Any:
     with _cache_lock:
         _cache[key] = (now + CONFIG.cache_ttl_seconds, value)
     return value
+
+
+_FETCH_HOST_OK = re.compile(
+    r"^https://[A-Za-z0-9.-]+\.(?:uwucdn|owocdn|[A-Za-z0-9]+cdn)\.[A-Za-z]+/",
+    re.IGNORECASE,
+)
+
+
+@app.get("/fetch")
+def fetch_proxy():
+    """Server-side fetch for kwik CDN resources the C# proxy can't retrieve.
+
+    The kwik AES-key endpoint blocks .NET HttpClient's TLS fingerprint (403)
+    while accepting requests/curl/browsers. The C# stream proxy retries its 403s
+    here, so the key (and any similarly gated resource) is fetched with a Python
+    `requests` client that passes the check, then streamed back to the player.
+    Restricted to kwik CDN hosts so this is not an open relay; internal-only.
+    """
+    url = request.args.get("url", "")
+    if not _FETCH_HOST_OK.match(url):
+        return jsonify({"error": "forbidden_host"}), 403
+    headers = {
+        "User-Agent": CONFIG.request_user_agent,
+        "Referer": CONFIG.stream_referer,
+        "Accept": "*/*",
+    }
+    if request.headers.get("Range"):
+        headers["Range"] = request.headers["Range"]
+    try:
+        upstream = requests.get(url, headers=headers, timeout=30)
+    except requests.RequestException as error:
+        return jsonify({"error": "upstream_unreachable", "message": str(error)}), 502
+    excluded = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+    passthrough = [(k, v) for k, v in upstream.headers.items() if k.lower() not in excluded]
+    return Response(upstream.content, status=upstream.status_code, headers=passthrough)
 
 
 @app.get("/")
@@ -167,7 +204,14 @@ def watch(provider: str | None = None):
     audio_language = stream["audio"]
     subtitle_language = "en" if audio_language == "ja" else "off"
     payload = {
-        "headers": {"Referer": stream["referer"]},
+        # The kwik CDN (uwucdn.top) gates segment delivery on BOTH a
+        # Referer: https://kwik.cx/ AND a browser-like User-Agent; without the
+        # UA it answers 403. Hand both to the C# stream proxy so every segment
+        # and key fetch carries them.
+        "headers": {
+            "Referer": stream["referer"],
+            "User-Agent": CONFIG.request_user_agent,
+        },
         "sources": [
             {
                 "url": stream["url"],

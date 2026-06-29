@@ -16,6 +16,7 @@ secure proxy.
 from __future__ import annotations
 
 import re
+from urllib.parse import urljoin
 
 import requests
 
@@ -162,6 +163,7 @@ def resolve_stream(anime_session: str, episode_session: str, audio_preference: s
     for button in ordered:
         m3u8 = _fetch_kwik(button["url"])
         if m3u8:
+            _prewarm_cdn(m3u8)
             return {
                 "url": m3u8,
                 "quality": f"{button['resolution']}p" if button["resolution"] else None,
@@ -169,3 +171,56 @@ def resolve_stream(anime_session: str, episode_session: str, audio_preference: s
                 "referer": CONFIG.stream_referer,
             }
     return None
+
+
+def _warm(url: str, headers: dict) -> None:
+    try:
+        requests.get(url, headers=headers, timeout=15)
+    except requests.RequestException:
+        pass
+
+
+def _prewarm_cdn(m3u8_url: str) -> None:
+    """Fetch the playlist, its AES key(s) and first segments with `requests` so
+    the kwik CDN caches them.
+
+    The C# stream proxy fetches with .NET HttpClient, whose TLS fingerprint the
+    kwik key endpoint rejects (403) on a cache miss, while `requests` (like a
+    browser/curl) is accepted. Warming the key here means the proxy's later
+    fetch is a cache HIT and succeeds, so decryption — and playback — works on
+    first watch instead of only after the key is incidentally cached.
+    """
+    headers = {
+        "User-Agent": CONFIG.request_user_agent,
+        "Referer": CONFIG.stream_referer,
+        "Accept": "*/*",
+    }
+    try:
+        response = requests.get(m3u8_url, headers=headers, timeout=20)
+    except requests.RequestException:
+        return
+    if response.status_code != 200:
+        return
+    body = response.text
+
+    def warm_playlist(playlist_url: str, text: str) -> None:
+        for uri in re.findall(r'URI="([^"]+)"', text):  # EXT-X-KEY / EXT-X-MAP
+            _warm(urljoin(playlist_url, uri), headers)
+        media = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+        for line in media[:2]:  # first couple of segments for instant start
+            _warm(urljoin(playlist_url, line), headers)
+
+    # A master playlist points at variant playlists; resolve one level so the
+    # key (which lives on the media playlist) gets warmed too.
+    if "#EXT-X-STREAM-INF" in body:
+        variants = [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.startswith("#")]
+        if variants:
+            variant_url = urljoin(m3u8_url, variants[0])
+            try:
+                variant = requests.get(variant_url, headers=headers, timeout=15)
+                if variant.status_code == 200:
+                    warm_playlist(variant_url, variant.text)
+            except requests.RequestException:
+                pass
+    else:
+        warm_playlist(m3u8_url, body)
