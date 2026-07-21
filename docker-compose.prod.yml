@@ -194,6 +194,17 @@ services:
       # The kwik AES-key endpoint 403s .NET's TLS fingerprint; the stream proxy
       # retries those 403s through the resolver's /fetch (Python requests passes).
       Scrapers__StreamFetchFallbackUrl: ${STREAM_FETCH_FALLBACK_URL:-http://animepahe:3400}
+      # Background cache warmer: keeps popular titles' episode lists (and,
+      # optionally, ep1 playback/CDN) hot. Gentle by design; playback warming is
+      # OFF by default until proven safe against the provider. Warmer__Enabled=false
+      # disables it entirely.
+      Warmer__Enabled: ${WARMER_ENABLED:-true}
+      Warmer__IntervalHours: ${WARMER_INTERVAL_HOURS:-3}
+      Warmer__TitleCount: ${WARMER_TITLE_COUNT:-30}
+      Warmer__PerTitleDelaySeconds: ${WARMER_PER_TITLE_DELAY_SECONDS:-8}
+      Warmer__StartupDelaySeconds: ${WARMER_STARTUP_DELAY_SECONDS:-180}
+      Warmer__WarmPlayback: ${WARMER_WARM_PLAYBACK:-false}
+      Warmer__PlaybackTitleCount: ${WARMER_PLAYBACK_TITLE_COUNT:-8}
       ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
       Redis__ConnectionString: redis:6379
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}
