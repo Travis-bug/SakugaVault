@@ -16,6 +16,10 @@ public sealed class ScraperOptions
     public string[] FallbackProviders { get; init; } = [];
     public int InterRequestDelayMilliseconds { get; init; } = 500;
     public int StreamCacheTtlMinutes { get; init; } = 240;
+    // Internal resolver base whose /fetch relay retrieves kwik CDN resources
+    // that 403 .NET HttpClient's TLS fingerprint (m3u8, AES key). Shared with
+    // PlaybackStreamProxyService via Scrapers:StreamFetchFallbackUrl.
+    public string StreamFetchFallbackUrl { get; init; } = string.Empty;
     public int StampedeLockSeconds { get; init; } = 300;
     public int StampedeWaitSeconds { get; init; } = 30;
     public ScraperRateLimitOptions RateLimit { get; init; } = new();
