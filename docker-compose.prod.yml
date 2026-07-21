@@ -145,6 +145,15 @@ services:
       FLARESOLVERR_URL: http://flaresolverr:8191
       ANIMEPAHE_BASES: ${ANIMEPAHE_BASES:-https://animepahe.com,https://animepahe.org}
       PROVIDER_NAME: ${ANIMEPAHE_PROVIDER_NAME:-animepahe}
+      # The kwik embed fetch is blocked by Cloudflare on datacenter IPs, so it
+      # needs a residential egress. Preferred: a prepaid pay-per-GB residential
+      # proxy (http://user:pass@host:port) — each fetch is ~24KB, and the daily
+      # cap plus the prepaid balance (leave auto-top-up OFF) act as stop-losses.
+      # ScrapingBee is the fallback when no proxy URL is set. Only the small
+      # embed page goes through either; segments/keys are unaffected.
+      KWIK_PROXY_URL: ${KWIK_PROXY_URL:-}
+      KWIK_PROXY_DAILY_CAP: ${KWIK_PROXY_DAILY_CAP:-2000}
+      SCRAPINGBEE_API_KEY: ${SCRAPINGBEE_API_KEY:-}
     depends_on:
       flaresolverr:
         condition: service_started
