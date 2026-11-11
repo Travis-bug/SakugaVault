@@ -154,6 +154,9 @@ services:
       Scrapers__PlaybackResolvers__3__RequestTimeoutSeconds: "75"
     ports:
       - "8080:8080"
+    # If the API exits because the database was not ready, start it again.
+    #tested
+    restart: unless-stopped
 
   web:
     build:
