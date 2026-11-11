@@ -41,9 +41,13 @@ public sealed class CatalogService(
                     return liveCatalog;
                 }
 
+                // The shadow rows were hydrated from earlier live passes, so they
+                // render a full home screen (title/poster/synopsis/genres) while
+                // the metadata provider is down — e.g. AniList's 2026-07 global
+                // API shutdown, which otherwise blanked the whole site.
                 logger.LogWarning(
-                    "Live provider catalog is enabled, but no provider returned a usable home feed. Returning an empty catalog instead of falling back to shadow rows.");
-                return EmptyCatalog();
+                    "Live provider catalog is enabled, but no provider returned a usable home feed. Falling back to shadow rows.");
+                return await LoadHomeCatalogFromDbAsync(cancellationToken);
             }
 
             return await LoadHomeCatalogFromDbAsync(cancellationToken);
@@ -66,11 +70,14 @@ public sealed class CatalogService(
                 return liveResults;
             }
 
+            // Same degradation story as the home catalog: the shadow rows are
+            // fully searchable, so a metadata-provider outage must not turn
+            // every search into "no results".
             logger.LogWarning(
-                "Live provider catalog is enabled, but no provider returned usable search results for query {Query}. Returning an empty provider-backed payload.",
+                "Live provider catalog is enabled, but no provider returned usable search results for query {Query}. Falling back to shadow rows.",
                 trimmedQuery);
 
-            return new CatalogSearchResponseDto(trimmedQuery, 0, []);
+            return await SearchFromDbAsync(trimmedQuery, normalizedLimit, cancellationToken);
         }
 
         return await SearchFromDbAsync(trimmedQuery, normalizedLimit, cancellationToken);
@@ -419,6 +426,19 @@ public sealed class CatalogService(
                     .Select(entry => ToAnimeCard(entry.Title))
                     .ToArray()))
             .ToArray();
+
+        // Shadow rows hydrated from live passes carry no genre links, which
+        // would leave the fallback home as a bare hero strip. Ship a single
+        // popularity rail instead so the page stays browsable.
+        if (genreRows.Length == 0)
+        {
+            genreRows =
+            [
+                new GenreRailDto(
+                    "Popular on SakugaVault",
+                    topAnime.Select(ToAnimeCard).ToArray())
+            ];
+        }
 
         return new HomeCatalogDto(heroItems, genreRows);
     }

@@ -1,3 +1,6 @@
 flask>=3.0,<4
 waitress>=3.0
 requests>=2.31
+# Must match the Playwright base image tag in the Dockerfile (browsers are baked
+# in for exactly this version). Used to drive Chromium for the kwik fetch.
+playwright==1.48.0

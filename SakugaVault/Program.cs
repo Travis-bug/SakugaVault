@@ -90,23 +90,77 @@ app.Use(async (context, next) =>
     await next();
 });
 
+// Apply EF migrations on every startup (dev AND prod) so a fresh database
+// gets its schema created automatically. Previously this was gated to
+// Development, which left production with no tables.
+//
+// MySQL can still be refusing connections when this runs: Compose waits for the
+// container's healthcheck, but the server can take another moment to accept TCP,
+// and the API then died here with "Unable to connect to any of the specified
+// MySQL hosts". So retry for a while, and if the database is still unreachable,
+// exit with a failure code instead of carrying on. Carrying on would leave the
+// API listening with no schema, answering every request with an error while
+// "docker ps" reports it healthy, which is harder to spot than a restart.
+// Exiting hands the problem to the container's restart policy
+// (restart: unless-stopped in docker-compose.yml), which starts us again.
+//tested
 {
-    await using var scope = app.Services.CreateAsyncScope();
-    var dbContext = scope.ServiceProvider.GetRequiredService<SakugaVaultDbContext>();
+    const int maxStartupAttempts = 10;
+    var startupDelay = TimeSpan.FromSeconds(3);
+    var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseStartup");
 
-    // Apply EF migrations on every startup (dev AND prod) so a fresh database
-    // gets its schema created automatically. Previously this was gated to
-    // Development, which left production with no tables.
-    await dbContext.Database.MigrateAsync(app.Lifetime.ApplicationStopping);
-
-    // Sample catalog seed data is for local development only.
-    if (app.Environment.IsDevelopment())
+    for (var attempt = 1; ; attempt++)
     {
-        var catalogOptions = scope.ServiceProvider.GetRequiredService<IOptions<CatalogOptions>>().Value;
-        if (catalogOptions.EnableDevelopmentSeedData)
+        try
         {
-            var seeder = scope.ServiceProvider.GetRequiredService<SakugaVaultSeeder>();
-            await seeder.SeedAsync(app.Lifetime.ApplicationStopping);
+            await using var scope = app.Services.CreateAsyncScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<SakugaVaultDbContext>();
+
+            await dbContext.Database.MigrateAsync(app.Lifetime.ApplicationStopping);
+
+            // Sample catalog seed data is for local development only.
+            if (app.Environment.IsDevelopment())
+            {
+                var catalogOptions = scope.ServiceProvider.GetRequiredService<IOptions<CatalogOptions>>().Value;
+                if (catalogOptions.EnableDevelopmentSeedData)
+                {
+                    var seeder = scope.ServiceProvider.GetRequiredService<SakugaVaultSeeder>();
+                    await seeder.SeedAsync(app.Lifetime.ApplicationStopping);
+                }
+            }
+
+            if (attempt > 1)
+            {
+                startupLogger.LogInformation("Database ready on attempt {Attempt}.", attempt);
+            }
+
+            break;
+        }
+        catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            // The container is shutting down; stop quietly.
+            return 0;
+        }
+        catch (Exception exception) when (attempt < maxStartupAttempts)
+        {
+            startupLogger.LogWarning(
+                "The database is not ready yet (attempt {Attempt} of {MaxAttempts}): {Reason}. Retrying in {Seconds} seconds.",
+                attempt,
+                maxStartupAttempts,
+                exception.Message,
+                startupDelay.TotalSeconds);
+
+            await Task.Delay(startupDelay, app.Lifetime.ApplicationStopping);
+        }
+        catch (Exception exception)
+        {
+            startupLogger.LogCritical(
+                exception,
+                "The database was still unreachable after {MaxAttempts} attempts, so the API has no schema to serve. "
+                + "Exiting with a failure code so the container restart policy can try again.",
+                maxStartupAttempts);
+
+            return 1;
         }
     }
 }
@@ -133,6 +187,10 @@ app.MapGet("/", () => Results.Ok(new
 RegisterScraperStartupChecks(app);
 
 app.Run();
+
+// 0 = normal shutdown. The database block above returns 1 when it gives up, which
+// is what tells Docker to restart the container.
+return 0;
 
 static void RegisterScraperStartupChecks(WebApplication app)
 {

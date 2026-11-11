@@ -322,26 +322,64 @@ public sealed class StreamScraperService(
         CancellationToken cancellationToken)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        foreach (var header in headers)
-        {
-            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-        }
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
 
         try
         {
-            using var response = await httpClientFactory
-                .CreateClient("stream-proxy-client")
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
-            return response.IsSuccessStatusCode
-                || response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable;
+            using var response = await SendProbeAsync(url, headers, timeoutCts.Token);
+            if (response.IsSuccessStatusCode
+                || response.StatusCode == System.Net.HttpStatusCode.RequestedRangeNotSatisfiable)
+            {
+                return true;
+            }
+
+            // The kwik CDN 403s .NET HttpClient's TLS fingerprint (m3u8 and AES
+            // key alike) while accepting Python/curl/browsers. The playback proxy
+            // already retries those 403s through the resolver's /fetch relay, so a
+            // source that only fails the direct .NET probe is still fully playable
+            // for users — re-probe through the same relay before rejecting it.
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden
+                && !string.IsNullOrWhiteSpace(scraperOptions.StreamFetchFallbackUrl))
+            {
+                var relayUrl =
+                    $"{scraperOptions.StreamFetchFallbackUrl.TrimEnd('/')}/fetch?url={Uri.EscapeDataString(url)}";
+                using var relayResponse = await SendProbeAsync(
+                    relayUrl,
+                    new Dictionary<string, string>(),
+                    timeoutCts.Token);
+                if (relayResponse.IsSuccessStatusCode)
+                {
+                    return true;
+                }
+            }
+
+            logger.LogInformation(
+                "Rejected playback source {StreamUrl}: HTTP {StatusCode}",
+                url,
+                (int)response.StatusCode);
+            return false;
         }
         catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
         {
             logger.LogInformation(exception, "Rejected unreachable playback source {StreamUrl}", url);
             return false;
         }
+    }
+
+    private async Task<HttpResponseMessage> SendProbeAsync(
+        string url,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        foreach (var header in headers)
+        {
+            request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        return await httpClientFactory
+            .CreateClient("stream-proxy-client")
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
     private IReadOnlyList<ScraperResolverOptions> BuildResolverSequence()

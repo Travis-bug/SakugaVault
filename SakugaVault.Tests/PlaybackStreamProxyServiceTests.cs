@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using SakugaVault.Services.Watch;
 
@@ -25,6 +26,7 @@ public sealed class PlaybackStreamProxyServiceTests
             new HttpContextAccessor { HttpContext = new DefaultHttpContext() },
             new StubHttpClientFactory(handler),
             TimeProvider.System,
+            new ConfigurationBuilder().Build(),
             NullLogger<PlaybackStreamProxyService>.Instance);
         var context = new DefaultHttpContext();
         context.Response.Body = new MemoryStream();
@@ -53,6 +55,7 @@ public sealed class PlaybackStreamProxyServiceTests
             new HttpContextAccessor { HttpContext = new DefaultHttpContext() },
             new StubHttpClientFactory(handler),
             TimeProvider.System,
+            new ConfigurationBuilder().Build(),
             NullLogger<PlaybackStreamProxyService>.Instance);
         var context = new DefaultHttpContext();
         context.Request.Headers.Cookie = $"{PlaybackSessionConstants.CookieName}=matching-session";

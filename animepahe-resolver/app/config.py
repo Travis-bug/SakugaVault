@@ -59,6 +59,21 @@ class ServiceConfig:
     # Background keep-alive interval so Cloudflare clearance never goes stale on
     # the user path.
     heartbeat_interval_seconds: int
+    # Optional residential proxy URL (http://user:pass@host:port). When set, the
+    # kwik embed page (which kwik gates behind Cloudflare and blocks from
+    # datacenter IPs) is fetched directly through it — the cheapest egress since
+    # the page is ~24KB and needs no JS rendering. Takes precedence over
+    # ScrapingBee. Use a PREPAID provider with auto-top-up off: the balance is
+    # the hard stop-loss.
+    kwik_proxy_url: str
+    # Belt-and-suspenders spend cap: max proxied kwik fetches per UTC day. At
+    # ~24KB/fetch the default 2000 is ~50MB/day (~$1.5/mo at $1/GB), so a
+    # runaway loop can never drain the proxy balance in one incident.
+    kwik_proxy_daily_cap: int
+    # Optional ScrapingBee API key. When set (and no kwik_proxy_url), the kwik
+    # embed page is fetched through ScrapingBee's residential proxy instead of
+    # a direct request.
+    scrapingbee_api_key: str
 
 
 def load_config() -> ServiceConfig:
@@ -80,6 +95,9 @@ def load_config() -> ServiceConfig:
         cache_ttl_seconds=_int("CACHE_TTL_SECONDS", 600),
         warm_on_start=_bool("WARM_ON_START", True),
         heartbeat_interval_seconds=_int("HEARTBEAT_INTERVAL_SECONDS", 180),
+        kwik_proxy_url=os.environ.get("KWIK_PROXY_URL", "").strip(),
+        kwik_proxy_daily_cap=_int("KWIK_PROXY_DAILY_CAP", 2000),
+        scrapingbee_api_key=os.environ.get("SCRAPINGBEE_API_KEY", "").strip(),
     )
 
 

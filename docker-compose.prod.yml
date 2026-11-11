@@ -145,6 +145,15 @@ services:
       FLARESOLVERR_URL: http://flaresolverr:8191
       ANIMEPAHE_BASES: ${ANIMEPAHE_BASES:-https://animepahe.com,https://animepahe.org}
       PROVIDER_NAME: ${ANIMEPAHE_PROVIDER_NAME:-animepahe}
+      # The kwik embed fetch is blocked by Cloudflare on datacenter IPs, so it
+      # needs a residential egress. Preferred: a prepaid pay-per-GB residential
+      # proxy (http://user:pass@host:port) — each fetch is ~24KB, and the daily
+      # cap plus the prepaid balance (leave auto-top-up OFF) act as stop-losses.
+      # ScrapingBee is the fallback when no proxy URL is set. Only the small
+      # embed page goes through either; segments/keys are unaffected.
+      KWIK_PROXY_URL: ${KWIK_PROXY_URL:-}
+      KWIK_PROXY_DAILY_CAP: ${KWIK_PROXY_DAILY_CAP:-2000}
+      SCRAPINGBEE_API_KEY: ${SCRAPINGBEE_API_KEY:-}
     depends_on:
       flaresolverr:
         condition: service_started
@@ -185,6 +194,17 @@ services:
       # The kwik AES-key endpoint 403s .NET's TLS fingerprint; the stream proxy
       # retries those 403s through the resolver's /fetch (Python requests passes).
       Scrapers__StreamFetchFallbackUrl: ${STREAM_FETCH_FALLBACK_URL:-http://animepahe:3400}
+      # Background cache warmer: keeps popular titles' episode lists (and,
+      # optionally, ep1 playback/CDN) hot. Gentle by design; playback warming is
+      # OFF by default until proven safe against the provider. Warmer__Enabled=false
+      # disables it entirely.
+      Warmer__Enabled: ${WARMER_ENABLED:-true}
+      Warmer__IntervalHours: ${WARMER_INTERVAL_HOURS:-3}
+      Warmer__TitleCount: ${WARMER_TITLE_COUNT:-30}
+      Warmer__PerTitleDelaySeconds: ${WARMER_PER_TITLE_DELAY_SECONDS:-8}
+      Warmer__StartupDelaySeconds: ${WARMER_STARTUP_DELAY_SECONDS:-180}
+      Warmer__WarmPlayback: ${WARMER_WARM_PLAYBACK:-false}
+      Warmer__PlaybackTitleCount: ${WARMER_PLAYBACK_TITLE_COUNT:-8}
       ConnectionStrings__MySql: Server=mysql;Port=3306;Database=${MYSQL_DATABASE};User=${MYSQL_USER};Password=${MYSQL_PASSWORD};
       Redis__ConnectionString: redis:6379
       ASPNETCORE_JWT_SIGNINGKEY: ${JWT_SIGNING_KEY}

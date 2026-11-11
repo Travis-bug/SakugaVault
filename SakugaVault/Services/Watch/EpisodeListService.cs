@@ -20,18 +20,25 @@ public sealed class EpisodeListService(
     IOptions<ScraperOptions> scraperOptionsAccessor,
     ILogger<EpisodeListService> logger) : IEpisodeListService
 {
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
+    // Kept longer than the background warmer's interval so popular titles' lists
+    // stay hot between warm passes (the warmer force-refreshes to pick up new episodes).
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(4);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private const int PerProviderTimeoutMilliseconds = 5_000;
+    // The AnimePahe/FlareSolverr episode fetch (title search + release pagination)
+    // routinely needs more than a few seconds; 5s guaranteed failure for every title.
+    private const int PerProviderTimeoutMilliseconds = 30_000;
 
-    public async Task<EpisodeListResult> GetEpisodesAsync(Guid animeId, CancellationToken cancellationToken)
+    public async Task<EpisodeListResult> GetEpisodesAsync(Guid animeId, CancellationToken cancellationToken, bool forceRefresh = false)
     {
         var cacheKey = BuildCacheKey(animeId);
-        var cached = await TryGetCachedResultAsync(cacheKey, cancellationToken);
-        if (cached is not null)
+        if (!forceRefresh)
         {
-            logger.LogDebug("Episode list cache hit for anime {AnimeId}.", animeId);
-            return cached;
+            var cached = await TryGetCachedResultAsync(cacheKey, cancellationToken);
+            if (cached is not null)
+            {
+                logger.LogDebug("Episode list cache hit for anime {AnimeId}.", animeId);
+                return cached;
+            }
         }
 
         var anime = await dbContext.Anime
@@ -79,13 +86,18 @@ public sealed class EpisodeListService(
 
         try
         {
-            ProviderAnimeInfo? providerInfo;
+            ProviderAnimeInfo? providerInfo = null;
             if (string.Equals(provider, anime.MetadataProvider, StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(anime.ExternalMetadataId))
             {
                 providerInfo = await animeProviderClient.GetAnimeInfoAsync(provider, anime.ExternalMetadataId, timeoutCts.Token);
             }
-            else
+
+            // The AniList id stored in ExternalMetadataId is not an AnimePahe
+            // session, so the direct info lookup 404s; the resolver only maps
+            // AniList titles to episodes via title search. Fall back to that
+            // whenever the id lookup returns no episodes.
+            if (providerInfo?.Episodes is not { Count: > 0 })
             {
                 providerInfo = await animeProviderClient.FindAnimeInfoByTitleAsync(provider, anime.Title, timeoutCts.Token);
             }

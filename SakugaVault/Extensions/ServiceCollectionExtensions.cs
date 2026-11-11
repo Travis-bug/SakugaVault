@@ -370,6 +370,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEpisodeListService, EpisodeListService>();
         services.AddScoped<SakugaVaultSeeder>();
         services.AddHostedService<WatchProgressFlushWorker>();
+        services.AddHostedService<SakugaVault.Services.Warming.CatalogWarmerService>();
 
         return services;
     }

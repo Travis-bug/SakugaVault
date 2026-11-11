@@ -15,7 +15,9 @@ secure proxy.
 
 from __future__ import annotations
 
+import datetime
 import re
+import threading
 from urllib.parse import urljoin
 
 import requests
@@ -108,7 +110,119 @@ def _extract_m3u8_from_kwik_page(page_html: str) -> str | None:
     return None
 
 
+# ---- proxied kwik fetch (residential egress) --------------------------------
+# Spend guard for the pay-per-GB proxy: count proxied fetches per UTC day and
+# refuse past the cap. The prepaid balance is the real stop-loss; this keeps a
+# runaway loop from draining it in a single incident.
+_proxy_meter_lock = threading.Lock()
+_proxy_meter = {"day": "", "count": 0}
+
+
+def _proxy_budget_ok() -> bool:
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    with _proxy_meter_lock:
+        if _proxy_meter["day"] != today:
+            _proxy_meter["day"] = today
+            _proxy_meter["count"] = 0
+        if _proxy_meter["count"] >= CONFIG.kwik_proxy_daily_cap:
+            return False
+        _proxy_meter["count"] += 1
+        return True
+
+
+def _fetch_kwik_via_proxy(kwik_url: str) -> str | None:
+    """Fetch the kwik stream through headless Chromium routed via the residential
+    proxy. A plain proxied request is not enough: kwik serves a Cloudflare JS
+    challenge (403 to any non-browser client, even one faking Chrome's TLS) and
+    withholds the source URL unless the request carries Referer: animepahe. Only
+    a real browser we drive ourselves satisfies challenge + IP + Referer at once,
+    so the browser worker (app.browser_kwik) navigates the embed and captures the
+    m3u8 off the network. Bandwidth is capped by aborting all media at the router."""
+    if not _proxy_budget_ok():
+        print(
+            f"[kwik] proxy daily cap ({CONFIG.kwik_proxy_daily_cap}) reached; refusing fetch",
+            flush=True,
+        )
+        return None
+    from app.browser_kwik import BROWSER_KWIK
+
+    return BROWSER_KWIK.fetch(kwik_url)
+
+
+def _fetch_kwik_via_scrapingbee(kwik_url: str) -> str | None:
+    """Fetch the kwik embed page through ScrapingBee (residential proxy + JS
+    rendering) to get past kwik's Cloudflare, which now blocks datacenter IPs.
+    Only the small embed HTML goes through ScrapingBee; segments/keys are
+    unaffected.
+
+    Two constraints shape the attempt plan:
+      - ScrapingBee sporadically returns transient 500s ("you will not be
+        charged for this request") that cluster in bursts; their docs say to
+        just retry. Failed attempts cost nothing.
+      - The C# API gives this resolver ~75s total, and a render_js call alone
+        can eat 60s — one slow failure used to kill the whole resolve AND queue
+        up every other in-flight resolve behind it.
+    So: two fast non-rendered attempts (the packed player script ships in the
+    raw HTML; the residential proxy usually isn't challenged, ~10s / 10
+    credits), then one JS-rendered attempt (clears a Cloudflare challenge page
+    if one appears, ~40s / 25 credits) as the last resort. Worst case stays
+    inside the API's budget."""
+    attempts = (
+        ("false", 20),
+        ("false", 20),
+        ("true", 35),
+    )
+    for attempt, (render_js, timeout) in enumerate(attempts, start=1):
+        try:
+            response = requests.get(
+                "https://app.scrapingbee.com/api/v1/",
+                params={
+                    "api_key": CONFIG.scrapingbee_api_key,
+                    "url": kwik_url,
+                    "render_js": render_js,
+                    "premium_proxy": "true",
+                    "forward_headers": "true",
+                },
+                headers={
+                    "Spb-Referer": CONFIG.kwik_fetch_referer,
+                    "Spb-User-Agent": CONFIG.request_user_agent,
+                },
+                timeout=timeout,
+            )
+        except requests.RequestException as error:
+            print(f"[kwik] scrapingbee attempt {attempt} error: {str(error)[:80]}", flush=True)
+            continue
+        if response.status_code != 200:
+            print(
+                f"[kwik] scrapingbee attempt {attempt} HTTP {response.status_code}: {response.text[:160]}",
+                flush=True,
+            )
+            continue
+        m3u8 = _extract_m3u8_from_kwik_page(response.text)
+        if m3u8:
+            return m3u8
+        # 200 but no packed player script — likely a challenge/interstitial
+        # page; the rendered attempt at the end usually lands the real page.
+        print(f"[kwik] scrapingbee attempt {attempt} returned 200 without a stream", flush=True)
+    return None
+
+
 def _fetch_kwik(kwik_url: str) -> str | None:
+    # kwik gates the embed page behind Cloudflare and blocks datacenter IPs, so
+    # a direct fetch fails from the server. Preferred egress order:
+    #   1. residential proxy (cheapest: ~24KB/fetch at pay-per-GB rates)
+    #   2. ScrapingBee (if a key is configured; pricier per call)
+    #   3. direct (works only from an unblocked/residential host)
+    if CONFIG.kwik_proxy_url:
+        m3u8 = _fetch_kwik_via_proxy(kwik_url)
+        if m3u8:
+            return m3u8
+        if not CONFIG.scrapingbee_api_key:
+            return None
+
+    if CONFIG.scrapingbee_api_key:
+        return _fetch_kwik_via_scrapingbee(kwik_url)
+
     try:
         response = requests.get(
             kwik_url,
